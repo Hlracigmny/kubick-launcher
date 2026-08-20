@@ -86,8 +86,14 @@ function collectLibraries(version, features = {}) {
     const d = describeLibrary(lib);
     if (!d) continue;
     downloads.push(d);
+    // Нативная библиотека нужна в обоих местах сразу.
+    // Старые версии запускаются от распакованных .dll рядом в папке нативов,
+    // а начиная с 1.19 Mojang отдаёт натив обычным jar и распаковывает его сама —
+    // LWJGL ищет его в classpath и кладёт в org.lwjgl.system.SharedLibraryExtractPath.
+    // Если натив не положить в classpath, свежие версии падают на старте:
+    // UnsatisfiedLinkError: Failed to locate library: lwjgl.dll
     if (d.native) natives.push(d);
-    else classpath.push(d.dest);
+    classpath.push(d.dest);
 
     // Старый формат: одна библиотека даёт и обычный jar, и отдельный натив
     if (lib.natives && lib.downloads && lib.downloads.artifact) {
@@ -103,7 +109,26 @@ function collectLibraries(version, features = {}) {
       classpath.push(main.dest);
     }
   }
-  return { classpath, natives, downloads };
+  // В манифестах 1.13–1.18 jar с классами перечислен и сам по себе, и рядом с нативом,
+  // поэтому один и тот же путь попадает в список дважды. Повторы в classpath
+  // безобидными не бывают: у Forge они ломают запуск, поэтому чистим здесь.
+  return {
+    classpath: uniqueBy(classpath, (p) => p),
+    natives: uniqueBy(natives, (n) => n.dest),
+    downloads: uniqueBy(downloads, (d) => d.dest),
+  };
+}
+
+function uniqueBy(list, keyOf) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const key = keyOf(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 // Архивы LWJGL кроме самих библиотек содержат .sha1/.git — в папку нативов они не нужны
@@ -140,6 +165,21 @@ function extractNatives(nativeDescriptors, targetDir) {
         // файл уже занят запущенной игрой — он и так актуален
       }
     }
+  }
+}
+
+/**
+ * Начиная с 1.19 ${natives_directory} — не папка с .dll, а корень рабочих подпапок:
+ * java (java.library.path), jna, lwjgl (куда LWJGL распаковывает себя), netty.
+ * Их надо создать заранее — иначе игра пишет в отчёте о падении
+ * «Contents of java.library.path : <not a directory>» и не стартует.
+ */
+const NATIVE_SCRATCH_DIRS = ['java', 'jna', 'lwjgl', 'netty'];
+
+function prepareNativeScratchDirs(nativesDir) {
+  for (const sub of NATIVE_SCRATCH_DIRS) {
+    try { fs.mkdirSync(path.join(nativesDir, sub), { recursive: true }); }
+    catch { /* папку держит запущенная игра — она уже есть */ }
   }
 }
 
@@ -225,6 +265,7 @@ async function installVersion(id, onProgress, settings) {
   const nativesDir = path.join(P.natives, version.id);
   report({ stage: 'natives', label: 'Нативные библиотеки', done: 0, total: 1 });
   extractNatives(collected.natives, nativesDir);
+  prepareNativeScratchDirs(nativesDir);
   report({ stage: 'natives', label: 'Нативные библиотеки', done: 1, total: 1 });
 
   if (version.logging && version.logging.client && version.logging.client.file) {

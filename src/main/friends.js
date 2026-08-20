@@ -29,8 +29,14 @@ let status = { listening: false, error: null };
 
 const online = new Map();   // код друга -> сведения о его открытом мире
 
-/** Постоянный код игрока: генерируется один раз и дальше не меняется. */
+/**
+ * Постоянный код игрока: генерируется один раз и дальше не меняется.
+ * Без аккаунта кода нет вовсе — он представляет игрока, а представлять некого:
+ * друзьям он показал бы «Игрок», и они не поняли бы, кого добавили.
+ * Поэтому код не выдаётся и даже не создаётся, пока аккаунт не выбран.
+ */
 function myCode() {
+  if (!store.getActiveAccount()) return null;
   if (!store.settings.friendCode) {
     const raw = crypto.randomBytes(4).toString('hex').toUpperCase();
     store.saveSettings({ friendCode: 'KB-' + raw.slice(0, 4) + '-' + raw.slice(4) });
@@ -65,6 +71,9 @@ function list() {
 }
 
 function add({ code, nick }) {
+  if (!store.getActiveAccount()) {
+    throw new Error('Сначала войдите в аккаунт — без него друзья не поймут, кто вы');
+  }
   const clean = normalizeCode(code);
   if (!/^KB-[0-9A-F]{4}-[0-9A-F]{4}$/.test(clean)) {
     throw new Error('Код должен выглядеть так: KB-A1B2-C3D4');
@@ -94,7 +103,14 @@ function isFriend(code) {
 }
 
 function snapshot() {
-  return { ...status, code: myCode(), nick: myNick(), friends: list() };
+  const account = store.getActiveAccount();
+  return {
+    ...status,
+    hasAccount: Boolean(account),
+    code: myCode(),
+    nick: myNick(),
+    friends: list(),
+  };
 }
 
 function push() {
@@ -111,12 +127,14 @@ function myOpenWorld() {
 
 function announce() {
   if (!socket) return;
+  const code = myCode();
+  if (!code) return;  // без аккаунта нам нечем представиться
   const world = myOpenWorld();
   if (!world) return; // мир не открыт — молчим, о нас нечего сообщать
 
   const payload = JSON.stringify({
     kubick: 1,
-    code: myCode(),
+    code,
     nick: myNick(),
     port: world.port,
     motd: world.motd,

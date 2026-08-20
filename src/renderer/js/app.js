@@ -1553,6 +1553,16 @@
 
     const nameInput = body.querySelector('#cr-name');
     const searchInput = body.querySelector('#cr-search');
+
+    /**
+     * Подсказка в поле имени показывает, как сборка назовётся, если оставить его пустым.
+     * Имя подставляется само и без этого, но иначе непонятно, какое именно получится.
+     */
+    function refreshNameHint() {
+      const mc = versionSel.value;
+      const label = LOADER_LABEL[loaderSel.value] || 'Minecraft';
+      nameInput.placeholder = mc ? label + ' ' + mc : 'Например: Приключения с друзьями';
+    }
     const typeSel = body.querySelector('#cr-type');
     const viewSeg = body.querySelector('#cr-view');
     const versionBox = body.querySelector('#cr-versions');
@@ -1791,6 +1801,7 @@
       const selected = versionBox.querySelector('.selected');
       if (selected) selected.scrollIntoView({ block: 'nearest' });
 
+      refreshNameHint();
       versionHint.textContent = 'Выбрана ' + versionSel.value + ' · найдено версий: ' + all.length +
         (all.length > shown.length ? ' (показаны первые ' + shown.length + ', уточните поиск)' : '');
     }
@@ -1845,7 +1856,7 @@
       searchTimer = setTimeout(fillVersions, 180);
     });
     typeSel.addEventListener('change', () => { fillVersions(); fillLoaderVersions(); });
-    loaderSel.addEventListener('change', fillLoaderVersions);
+    loaderSel.addEventListener('change', () => { fillLoaderVersions(); refreshNameHint(); });
 
     // Список версий грузится в фоне — если он подъедет позже, перерисуем выбор
     if (!state.versions.length) {
@@ -1885,8 +1896,10 @@
       return;
     }
 
+    // Пустое имя допустимо: главный процесс подставит «загрузчик + версия».
+    // Здесь то же самое подставляем явно, чтобы имя совпадало с подсказкой в поле.
     const payload = {
-      name: nameInput.value.trim(),
+      name: nameInput.value.trim() || (nameInput.placeholder.startsWith('Например') ? '' : nameInput.placeholder),
       mcVersion: versionSel.value,
       loader: loaderSel.value,
       loaderVersion: loaderSel.value === 'vanilla' ? null : (loaderSel2.value || null),
@@ -2679,10 +2692,16 @@
   /* ========================== Игра по сети =========================== */
 
   function renderFriends(body, actions) {
-    actions.appendChild(button('Добавить сервер вручную', I.plus, 'ghost sm', openManualServer));
-    actions.appendChild(button('Добавить друга', I.users, 'primary sm', openAddFriend));
+    // Код представляет игрока, поэтому без аккаунта его нет: друзья увидели бы
+    // безымянного «Игрока» и не поняли бы, кого добавили
+    const signedIn = Boolean(activeAccount());
 
-    body.appendChild(friendsPanel());
+    actions.appendChild(button('Добавить сервер вручную', I.plus, 'ghost sm', openManualServer));
+    if (signedIn) {
+      actions.appendChild(button('Добавить друга', I.users, 'primary sm', openAddFriend));
+    }
+
+    body.appendChild(friendsPanel(signedIn));
 
     /* --- Серверы, добавленные в сборки --- */
     if (state.instances.length) {
@@ -2728,8 +2747,27 @@
    * Друзья. Обменялись кодами один раз — дальше мир, открытый другом,
    * сам появляется в списке серверов у всех, кто добавил его в друзья.
    */
-  function friendsPanel() {
+  function friendsPanel(signedIn) {
     const data = state.friends;
+
+    if (!signedIn) {
+      const panel = el(
+        '<div class="panel">' +
+          '<h2>Друзья</h2>' +
+          '<p class="panel-sub">Код игрока появится, когда вы войдёте в аккаунт.</p>' +
+        '</div>'
+      );
+      const empty = el(
+        '<div class="net-empty">' + I.user +
+          '<b>Сначала войдите в аккаунт</b>' +
+          '<span>Код нужен, чтобы друзья понимали, кого добавляют — он показывает ваш ник. ' +
+          'Без аккаунта показывать нечего.</span>' +
+        '</div>'
+      );
+      empty.appendChild(button('Перейти к аккаунтам', I.user, 'primary sm', () => go('accounts')));
+      panel.appendChild(empty);
+      return panel;
+    }
 
     const panel = el(
       '<div class="panel">' +

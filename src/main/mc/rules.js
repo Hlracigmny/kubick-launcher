@@ -136,6 +136,12 @@ function mergeVersions(parent, child) {
 /**
  * Оставляет по одной библиотеке на пару group:artifact — с наибольшей версией.
  * Без этого Forge/Fabric тянут дубликаты в classpath и игра падает на старте.
+ *
+ * Нативы считаются отдельной библиотекой. В манифестах 1.13–1.18 одна и та же
+ * координата перечислена дважды: один раз как jar с классами, второй — с полем
+ * natives и классификаторами. Имя у обеих записей одинаковое, и без пометки
+ * в ключе натив вытеснялся классами: папка нативов оставалась пустой,
+ * а игра падала с UnsatisfiedLinkError.
  */
 function dedupeLibraries(libs) {
   const best = new Map();
@@ -143,7 +149,7 @@ function dedupeLibraries(libs) {
   for (const lib of libs) {
     if (!lib || !lib.name) continue;
     const parts = lib.name.split(':');
-    const key = parts[0] + ':' + parts[1] + ':' + (parts[3] || '');
+    const key = parts[0] + ':' + parts[1] + ':' + (parts[3] || '') + (lib.natives ? ':natives' : '');
     const version = parts[2] || '0';
     const prev = best.get(key);
     if (!prev) { best.set(key, { lib, version }); order.push(key); continue; }
