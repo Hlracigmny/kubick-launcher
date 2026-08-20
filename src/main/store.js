@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = {
   accent: 'sand',
   minimizeToTray: false,     // закрытие сворачивает в трей
   windowControls: 'mac',     // стиль кнопок окна
+  windowBounds: null,        // запомненный размер окна
   friendCode: '',           // постоянный код для друзей
   autoAddFriendServers: true,
 };

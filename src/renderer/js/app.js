@@ -201,6 +201,11 @@
       overrides: { ...(inst.overrides || {}) },
       data: {},              // кеш загруженного по разделам
       logOptions: { follow: true, wrap: true, color: true },
+      cart: [],
+      catalogType: 'mod',
+      catalogSource: 'modrinth',
+      catalogQuery: '',
+      catalogResults: null,
       logText: null,
       openedLog: null,
     };
@@ -427,12 +432,12 @@
         main.appendChild(el('<div class="hint" style="margin-top:10px">Всего: ' + items.length + '</div>'));
       }
 
+      // Каталог открывается здесь же — уходить из окна сборки не нужно
       aside.appendChild(button('Скачать', I.download, 'primary sm block', () => {
-        window.UI.closeModal();
-        state.modsQuery.instanceId = inst.id;
-        state.modsQuery.type = opts.catalogType;
-        state.modsResults = null;
-        go('mods');
+        ui.catalogType = opts.catalogType;
+        ui.catalogBack = ui.section;
+        ui.section = 'catalog';
+        paint();
       }));
       aside.appendChild(button('Добавить файлы', I.plus, 'sm block', async () => {
         await guard('Не удалось добавить файлы', async () => {
@@ -856,6 +861,260 @@
       ));
     }
 
+    /* ------------------------------ Каталог ----------------------------- */
+
+    const CATALOG_TYPES = [
+      { id: 'mod', label: 'Моды', sub: 'mods' },
+      { id: 'resourcepack', label: 'Наборы ресурсов', sub: 'resourcepacks' },
+      { id: 'shader', label: 'Наборы шейдеров', sub: 'shaderpacks' },
+    ];
+
+    let catalogToken = 0;
+
+    /**
+     * Каталог внутри окна сборки. Выбранное складывается в корзину,
+     * а скачивается всё разом — по галочкам, которые можно снять.
+     */
+    function sectionCatalog(target) {
+      const type = ui.catalogType || 'mod';
+      const typeInfo = CATALOG_TYPES.find((t) => t.id === type) || CATALOG_TYPES[0];
+
+      const wrap = el(
+        '<div class="sec">' +
+          '<div class="sec-head cat-head">' +
+            '<div><h2>Каталог · ' + esc(typeInfo.label) + '</h2>' +
+            '<p>Отобранное попадёт в корзину справа — скачается всё сразу.</p></div>' +
+            '<div data-role="back"></div>' +
+          '</div>' +
+          '<div class="cat-tools"></div>' +
+          '<div class="sec-split"><div class="sec-main" data-role="results"></div>' +
+          '<div class="sec-aside" data-role="cart"></div></div>' +
+        '</div>'
+      );
+
+      wrap.querySelector('[data-role="back"]').appendChild(
+        button('Назад', I.rows, 'sm', () => { ui.section = ui.catalogBack || 'mods'; paint(); })
+      );
+
+      /* --- Панель поиска --- */
+      const tools = wrap.querySelector('.cat-tools');
+
+      const typeSeg = el('<div class="seg"></div>');
+      for (const t of CATALOG_TYPES) {
+        const btn = el('<button' + (t.id === type ? ' class="active"' : '') + '>' + esc(t.label) + '</button>');
+        btn.addEventListener('click', () => {
+          ui.catalogType = t.id;
+          ui.catalogResults = null;
+          paint();
+        });
+        typeSeg.appendChild(btn);
+      }
+      tools.appendChild(typeSeg);
+
+      const search = el(
+        '<div class="search-wrap">' + I.search +
+        '<input class="input" placeholder="Поиск: Sodium, JEI, Create…" value="' + esc(ui.catalogQuery || '') + '">' +
+        '</div>'
+      );
+      const input = search.querySelector('input');
+      let timer = null;
+      input.addEventListener('input', () => {
+        ui.catalogQuery = input.value;
+        clearTimeout(timer);
+        timer = setTimeout(() => { ui.catalogResults = null; paint(); }, 420);
+      });
+      tools.appendChild(search);
+
+      const srcSeg = el('<div class="seg"></div>');
+      for (const src of [['modrinth', 'Modrinth'], ['curseforge', 'CurseForge']]) {
+        const btn = el('<button' + ((ui.catalogSource || 'modrinth') === src[0] ? ' class="active"' : '') + '>' + src[1] + '</button>');
+        btn.addEventListener('click', () => {
+          ui.catalogSource = src[0];
+          ui.catalogResults = null;
+          paint();
+        });
+        srcSeg.appendChild(btn);
+      }
+      tools.appendChild(srcSeg);
+
+      target.appendChild(wrap);
+
+      /* --- Результаты --- */
+      const results = wrap.querySelector('[data-role="results"]');
+      if (!ui.catalogResults) {
+        results.innerHTML = '<div class="skeleton" style="height:62px"></div>' +
+          '<div class="skeleton" style="height:62px;margin-top:9px"></div>';
+        const token = ++catalogToken;
+        window.api.mods.search({
+          source: ui.catalogSource || 'modrinth',
+          query: ui.catalogQuery || '',
+          gameVersion: inst.mcVersion,
+          loader: type === 'mod' ? inst.loader : null,
+          projectType: type,
+          limit: 24,
+          sort: (ui.catalogQuery || '') ? 'relevance' : 'downloads',
+        }).then((data) => {
+          if (token !== catalogToken) return;
+          ui.catalogResults = data.items || [];
+          paint();
+        }).catch((e) => {
+          if (token !== catalogToken) return;
+          ui.catalogResults = [];
+          ui.catalogError = e.message;
+          paint();
+        });
+      } else if (ui.catalogError) {
+        results.appendChild(el('<div class="net-note err">' + esc(ui.catalogError) + '</div>'));
+        ui.catalogError = null;
+      } else if (!ui.catalogResults.length) {
+        results.appendChild(el('<div class="version-empty">Ничего не найдено под Minecraft ' +
+          esc(inst.mcVersion) + '</div>'));
+      } else {
+        for (const item of ui.catalogResults) results.appendChild(catalogRow(item, type));
+      }
+
+      /* --- Корзина --- */
+      renderCart(wrap.querySelector('[data-role="cart"]'));
+    }
+
+    function inCart(item) {
+      return (ui.cart || []).some((c) => c.item.id === item.id && c.item.source === item.source);
+    }
+
+    function catalogRow(item, type) {
+      const already = inCart(item);
+      const row = el(
+        '<div class="pack-row' + (already ? ' selected' : '') + '">' +
+          '<div class="mod-icon">' +
+            (item.icon ? '<img loading="lazy" src="' + esc(item.icon) + '" alt="">'
+                       : esc(String(item.name || '?').slice(0, 2).toUpperCase())) + '</div>' +
+          '<div class="mod-main">' +
+            '<div class="mod-title"><b>' + esc(item.name) + '</b>' +
+              '<span class="src-badge ' + esc(item.source) + '">' +
+              (item.source === 'modrinth' ? 'Modrinth' : 'CurseForge') + '</span></div>' +
+            '<div class="mod-desc">' + esc(item.summary) + '</div>' +
+            '<div class="mod-meta"><span>' + I.download + formatCount(item.downloads) + '</span>' +
+              '<span>' + I.user + esc(item.author) + '</span></div>' +
+          '</div>' +
+          '<div class="mod-actions" data-role="act"></div>' +
+        '</div>'
+      );
+      const img = row.querySelector('img');
+      if (img) {
+        img.addEventListener('error', () => {
+          img.parentElement.textContent = String(item.name || '?').slice(0, 2).toUpperCase();
+        });
+      }
+
+      const act = row.querySelector('[data-role="act"]');
+      if (already) {
+        act.appendChild(el('<span class="chip" style="color:var(--ok);border-color:rgba(156,175,136,.4)">в корзине</span>'));
+      } else {
+        const add = button('В корзину', I.plus, 'primary sm', async () => {
+          add.disabled = true;
+          add.textContent = 'Ищем версию…';
+          try {
+            const versions = await window.api.mods.versions({
+              source: item.source,
+              projectId: item.id,
+              gameVersion: inst.mcVersion,
+              loader: type === 'mod' ? inst.loader : null,
+            });
+            if (!versions.length) {
+              toastErr('Нет подходящей версии', item.name + ' не поддерживает Minecraft ' + inst.mcVersion);
+              return;
+            }
+            const best = versions.find((v) => v.channel === 'release') || versions[0];
+            ui.cart = [...(ui.cart || []), { item, version: best, versions, projectType: type, checked: true }];
+            paint();
+          } catch (e) {
+            toastErr('Не удалось получить версии', e.message);
+          } finally {
+            add.disabled = false;
+            add.innerHTML = I.plus + 'В корзину';
+          }
+        });
+        act.appendChild(add);
+      }
+      return row;
+    }
+
+    function renderCart(host) {
+      const cart = ui.cart || [];
+      const checked = cart.filter((c) => c.checked);
+
+      host.appendChild(el('<div class="cart-title">Корзина · ' + cart.length + '</div>'));
+
+      if (!cart.length) {
+        host.appendChild(el('<div class="cart-empty">Пока пусто. Нажимайте «В корзину» — ' +
+          'скачаете всё одним разом.</div>'));
+        return;
+      }
+
+      const list = el('<div class="cart-list"></div>');
+      for (const entry of cart) {
+        const row = el(
+          '<div class="cart-row' + (entry.checked ? '' : ' off') + '">' +
+            '<label class="check"><input type="checkbox"' + (entry.checked ? ' checked' : '') + '></label>' +
+            '<div class="cart-info"><b>' + esc(entry.item.name) + '</b>' +
+              '<span>' + esc(entry.version.versionNumber || entry.version.name || '') + '</span></div>' +
+          '</div>'
+        );
+        row.querySelector('input').addEventListener('change', (e) => {
+          entry.checked = e.target.checked;
+          paint();
+        });
+        row.appendChild(iconButton(I.x, 'Убрать из корзины', () => {
+          ui.cart = cart.filter((c) => c !== entry);
+          paint();
+        }));
+        list.appendChild(row);
+      }
+      host.appendChild(list);
+
+      const download = button('Скачать выбранное · ' + checked.length, I.download, 'primary sm block',
+        () => downloadCart());
+      download.disabled = !checked.length;
+      host.appendChild(download);
+
+      host.appendChild(button('Очистить корзину', I.trash, 'sm block', () => {
+        ui.cart = [];
+        paint();
+      }));
+    }
+
+    async function downloadCart() {
+      const queue = (ui.cart || []).filter((c) => c.checked);
+      if (!queue.length) return;
+
+      setStatus('Скачивание: 0 из ' + queue.length, 0, 'busy');
+      let done = 0;
+      const failed = [];
+
+      for (const entry of queue) {
+        try {
+          await window.api.mods.install(inst.id, entry.version, entry.projectType);
+          done++;
+          setStatus('Скачивание: ' + done + ' из ' + queue.length,
+            Math.round((done / queue.length) * 100), 'busy');
+        } catch (e) {
+          failed.push(entry.item.name + ' — ' + e.message);
+        }
+      }
+
+      // Скачанное убираем, невыбранное остаётся ждать в корзине
+      ui.cart = (ui.cart || []).filter((c) => !c.checked);
+      delete ui.data.mods;
+      delete ui.data.resourcepacks;
+      delete ui.data.shaderpacks;
+      await loadInstances();
+      paint();
+      setStatus('Готов к работе', 0, '');
+
+      if (failed.length) toastErr('Не удалось скачать: ' + failed.length, failed[0]);
+      if (done) toastOk('Скачано: ' + done, 'Файлы уже в папке сборки');
+    }
+
     const SECTION_RENDER = {
       log: sectionLog,
       version: sectionVersion,
@@ -870,6 +1129,7 @@
       screenshots: sectionScreenshots,
       settings: sectionSettings,
       logs: sectionLogs,
+      catalog: sectionCatalog,
     };
 
     paint();
@@ -2902,6 +3162,7 @@
       if (state.bgPhoto) {
         layer.style.backgroundImage = 'url(' + state.bgPhoto + ')';
         layer.classList.add('on');
+        root.dataset.bgphoto = 'on';
         return;
       }
     }
@@ -2914,11 +3175,13 @@
     if (state.themePhoto && state.themePhoto.id === theme) {
       layer.style.backgroundImage = 'url(' + state.themePhoto.dataUrl + ')';
       layer.classList.add('on');
+      root.dataset.bgphoto = 'on';
       return;
     }
 
     layer.classList.remove('on');
     layer.style.backgroundImage = '';
+    root.dataset.bgphoto = 'off';
   }
 
   /* --- Интеграции --- */
@@ -3455,7 +3718,80 @@
     for (const item of document.querySelectorAll('.nav-item')) {
       item.addEventListener('click', () => go(item.dataset.view));
     }
-    $('#account-card').addEventListener('click', () => go('accounts'));
+    $('#account-card').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleAccountMenu();
+    });
+  }
+
+  /**
+   * Меню игрока над карточкой аккаунта: кто вошёл, папка лаунчера,
+   * переход к аккаунтам и полный выход из программы.
+   */
+  function toggleAccountMenu() {
+    const existing = $('#account-menu');
+    if (existing) { closeAccountMenu(); return; }
+
+    const account = activeAccount();
+    const card = $('#account-card');
+    const box = card.getBoundingClientRect();
+
+    const menu = el(
+      '<div class="account-menu" id="account-menu">' +
+        '<div class="am-head">' +
+          '<div class="avatar">' +
+            (account && account.skinUrl
+              ? '<img src="' + esc(account.skinUrl) + '">'
+              : esc(account ? account.name.slice(0, 1).toUpperCase() : '?')) +
+          '</div>' +
+          '<div class="am-who">' +
+            '<b>' + esc(account ? account.name : 'Нет аккаунта') + '</b>' +
+            '<span>' + esc(account
+              ? (account.type === 'microsoft' ? 'Microsoft' : 'Офлайн-профиль')
+              : 'Войдите, чтобы играть') +
+              ' · v' + esc(state.appInfo.version || '') + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="am-items"></div>' +
+      '</div>'
+    );
+
+    const items = menu.querySelector('.am-items');
+    const addItem = (label, icon, kind, onClick) => {
+      const node = el('<button class="am-item' + (kind ? ' ' + kind : '') + '">' + icon + esc(label) + '</button>');
+      node.addEventListener('click', () => { closeAccountMenu(); onClick(); });
+      items.appendChild(node);
+    };
+
+    addItem('Папка', I.folder, '', () => window.api.app.reveal('root'));
+    addItem('Аккаунт', I.user, '', () => go('accounts'));
+    addItem('Выход', I.power, 'danger', () => window.api.app.quit());
+
+    // Ширину задаём до замера высоты: от неё зависит перенос строк, а значит и высота
+    menu.style.left = Math.round(box.left) + 'px';
+    menu.style.width = Math.max(208, Math.round(box.width)) + 'px';
+    menu.style.top = '-9999px';
+    document.body.appendChild(menu);
+
+    // Всплывает над карточкой — она прижата к низу боковой панели.
+    // offsetHeight берём не случайно: анимация появления масштабирует элемент,
+    // и getBoundingClientRect вернул бы высоту искажённого кадра.
+    menu.style.top = Math.max(46, Math.round(box.top - menu.offsetHeight - 8)) + 'px';
+
+    setTimeout(() => {
+      document.addEventListener('click', closeAccountMenu, { once: true });
+      document.addEventListener('keydown', accountMenuKey);
+    }, 0);
+  }
+
+  function accountMenuKey(e) {
+    if (e.key === 'Escape') closeAccountMenu();
+  }
+
+  function closeAccountMenu() {
+    const menu = $('#account-menu');
+    if (menu) menu.remove();
+    document.removeEventListener('keydown', accountMenuKey);
   }
 
   async function init() {

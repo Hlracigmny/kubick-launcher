@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),
     close: () => ipcRenderer.send('window:close'),
+    quit: () => ipcRenderer.send('app:quit'),
     openExternal: (url) => call('shell:openExternal', { url }),
     reveal: (which) => call('settings:reveal', which),
   },

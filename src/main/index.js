@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, dialog, nativeTheme, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, nativeTheme, Tray, Menu, nativeImage, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -30,10 +30,34 @@ let msaCancel = false;
 
 P.ensureDirs();
 
+/**
+ * Размер окна под конкретный экран: на большом мониторе окно крупнее,
+ * на ноутбуке — не вылезает за края. Прошлый размер запоминается.
+ */
+function initialBounds() {
+  const saved = store.settings.windowBounds;
+  const area = screen.getPrimaryDisplay().workAreaSize;
+
+  if (saved && saved.width && saved.height) {
+    // Монитор могли поменять — не даём окну оказаться больше рабочей области
+    return {
+      width: Math.min(saved.width, area.width),
+      height: Math.min(saved.height, area.height),
+      maximized: Boolean(saved.maximized),
+    };
+  }
+  return {
+    width: Math.max(1040, Math.min(1500, Math.round(area.width * 0.86))),
+    height: Math.max(660, Math.min(960, Math.round(area.height * 0.88))),
+    maximized: false,
+  };
+}
+
 function createWindow() {
+  const bounds = initialBounds();
   win = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    width: bounds.width,
+    height: bounds.height,
     minWidth: 1040,
     minHeight: 660,
     show: false,
@@ -50,7 +74,26 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    if (bounds.maximized) win.maximize();
+    win.show();
+  });
+
+  // Запоминаем размер, чтобы в следующий раз открыть так же
+  const remember = () => {
+    if (!win || win.isDestroyed() || win.isMinimized()) return;
+    const maximized = win.isMaximized();
+    const size = maximized ? store.settings.windowBounds || {} : win.getBounds();
+    store.saveSettings({ windowBounds: { width: size.width, height: size.height, maximized } });
+  };
+  let rememberTimer = null;
+  const scheduleRemember = () => {
+    clearTimeout(rememberTimer);
+    rememberTimer = setTimeout(remember, 400);
+  };
+  win.on('resize', scheduleRemember);
+  win.on('maximize', scheduleRemember);
+  win.on('unmaximize', scheduleRemember);
 
   // Внешние ссылки открываем в системном браузере, а не внутри лаунчера
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -79,6 +122,11 @@ function createWindow() {
         });
       }
     }
+  });
+
+  // Ошибки интерфейса иначе видны только в devtools — выводим их в общий лог
+  win.webContents.on('console-message', (e, level, message, line, source) => {
+    if (level >= 2) console.error('[renderer] ' + message + '  (' + String(source).split('/').pop() + ':' + line + ')');
   });
 
   win.on('closed', () => { win = null; });
@@ -146,6 +194,9 @@ ipcMain.on('window:maximize', () => {
   else win.maximize();
 });
 ipcMain.on('window:close', () => win && win.close());
+
+// Полный выход в обход сворачивания в трей
+ipcMain.on('app:quit', () => { quitting = true; app.quit(); });
 
 /* --------------------------- Настройки ----------------------------- */
 
@@ -510,6 +561,11 @@ handle('logs:read', async ({ id }) => {
 });
 
 /* ---------------------------- Жизненный цикл ----------------------- */
+
+// Запуск из исходников не должен воевать с установленной версией за блокировку
+if (!app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('userData'), 'dev'));
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
