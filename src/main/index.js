@@ -22,6 +22,8 @@ const vpn = require('./vpn');
 const idata = require('./instance-data');
 const mcping = require('./mcping');
 const serverList = require('./servers');
+const instanceIO = require('./instance-io');
+const proxy = require('./proxy');
 
 let win = null;
 let tray = null;
@@ -268,11 +270,58 @@ handle('instances:openFolder', async ({ id, sub }) => {
   return dir;
 });
 
+/* --------------------- Перенос сборок файлом ------------------------ */
+
+const KUBICK_FILTER = [{ name: 'Сборка Kubick', extensions: ['kubick'] }];
+
+handle('io:inspect', async ({ id }) => instanceIO.inspect(id));
+
+handle('io:export', async ({ id, parts, includeSettings }) => {
+  if (!store.getInstance(id)) throw new Error('Сборка не найдена');
+
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Куда сохранить сборку',
+    defaultPath: instanceIO.suggestedFileName(id),
+    filters: KUBICK_FILTER,
+  });
+  if (result.canceled || !result.filePath) return null;
+
+  return instanceIO.exportInstance({ id, file: result.filePath, parts, includeSettings });
+});
+
+handle('io:pick', async () => {
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Выберите файл сборки',
+    properties: ['openFile'],
+    filters: KUBICK_FILTER,
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  const file = result.filePaths[0];
+  return { file, ...instanceIO.preview(file) };
+});
+
+handle('io:import', async ({ file, name }) =>
+  instanceIO.importInstance({ file, name }, (p) => send('task:progress', { scope: 'import', ...p })));
+
+handle('io:reveal', async ({ file }) => { shell.showItemInFolder(file); return true; });
+
 /* ---------------------------- Запуск ------------------------------- */
 
 handle('game:launch', async ({ id, server }) => {
   const inst = store.getInstance(id);
   if (!inst) throw new Error('Сборка не найдена');
+
+  // Смена IP: игра идёт на локальный порт, а наружу соединение уходит через прокси
+  let target = server || null;
+  if (target && proxy.status().connected) {
+    const { host, port } = mcping.parseAddress(target);
+    try {
+      const relay = await proxy.relayFor(host, port);
+      if (relay) target = relay.host + ':' + relay.port;
+    } catch (e) {
+      throw new Error('Не удалось подключиться через прокси: ' + e.message);
+    }
+  }
 
   let account = store.getActiveAccount();
   if (!account) throw new Error('Добавьте аккаунт, чтобы играть');
@@ -300,7 +349,7 @@ handle('game:launch', async ({ id, server }) => {
       }
       send('game:exit', event);
     }
-  }, { server: server || null });
+  }, { server: target });
 
   const current = store.getInstance(id);
   if (current) store.upsertInstance({ ...current, lastPlayed: Date.now() });
@@ -388,6 +437,7 @@ handle('java:pick', async () => {
 
 handle('mods:search', async (opts) => mods.search(opts, store.settings));
 handle('mods:versions', async (opts) => mods.versions(opts, store.settings));
+handle('mods:categories', async ({ projectType }) => mods.categoriesOf(projectType));
 
 handle('mods:install', async ({ instanceId, version, projectType }) => {
   const inst = store.getInstance(instanceId);
@@ -422,6 +472,17 @@ handle('mods:toggle', async ({ filePath, enabled }) => mods.toggle(filePath, ena
 handle('mods:remove', async ({ filePath }) => { mods.remove(filePath); return true; });
 
 /* ---------------------------- Серверы ------------------------------ */
+
+/* ---------------------------- Смена IP ----------------------------- */
+
+handle('proxy:list', async () => proxy.list());
+handle('proxy:add', async (payload) => proxy.add(payload));
+handle('proxy:remove', async ({ id }) => proxy.remove(id));
+handle('proxy:check', async ({ id }) => proxy.check(id));
+handle('proxy:ip', async () => proxy.externalIp());
+handle('proxy:status', async () => proxy.status());
+handle('proxy:start', async ({ id }) => proxy.start(id));
+handle('proxy:stop', async () => { proxy.stop(); return proxy.status(); });
 
 handle('servers:list', async () => serverList.list());
 handle('servers:status', async ({ force } = {}) => serverList.statuses({ force: Boolean(force) }));

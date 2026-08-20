@@ -12,6 +12,49 @@ const CF_LOADER = { forge: 1, fabric: 4, quilt: 5, neoforge: 6 };
 
 const TARGET_DIR = { mod: 'mods', resourcepack: 'resourcepacks', shader: 'shaderpacks', modpack: 'mods' };
 
+function asList(value) {
+  if (!value) return [];
+  return (Array.isArray(value) ? value : [value]).map((v) => String(v).trim()).filter(Boolean);
+}
+
+/**
+ * Категории Modrinth по типам проектов. Набор фиксированный и задан самим сервисом,
+ * поэтому держим его здесь, а не тянем отдельным запросом при каждом открытии каталога.
+ * У CurseForge своя система категорий — там фильтр по ним не предлагается.
+ */
+const MODRINTH_CATEGORIES = {
+  mod: [
+    ['adventure', 'Приключения'], ['cursed', 'Странное'], ['decoration', 'Декор'],
+    ['economy', 'Экономика'], ['equipment', 'Снаряжение'], ['food', 'Еда'],
+    ['game-mechanics', 'Механики'], ['library', 'Библиотеки'], ['magic', 'Магия'],
+    ['management', 'Управление'], ['minigame', 'Мини-игры'], ['mobs', 'Мобы'],
+    ['optimization', 'Оптимизация'], ['social', 'Общение'], ['storage', 'Хранение'],
+    ['technology', 'Техника'], ['transportation', 'Транспорт'], ['utility', 'Утилиты'],
+    ['worldgen', 'Генерация мира'],
+  ],
+  resourcepack: [
+    ['audio', 'Звук'], ['blocks', 'Блоки'], ['combat', 'Бой'], ['core-shaders', 'Core-шейдеры'],
+    ['decoration', 'Декор'], ['entities', 'Существа'], ['environment', 'Окружение'],
+    ['equipment', 'Снаряжение'], ['fonts', 'Шрифты'], ['gui', 'Интерфейс'], ['items', 'Предметы'],
+    ['locale', 'Локализация'], ['modded', 'Для модов'], ['models', 'Модели'],
+    ['realistic', 'Реализм'], ['simplistic', 'Минимализм'], ['tweaks', 'Правки'],
+    ['utility', 'Утилиты'], ['vanilla-like', 'В духе ванили'],
+  ],
+  shader: [
+    ['atmosphere', 'Атмосфера'], ['bloom', 'Свечение'], ['cartoon', 'Мультяшные'],
+    ['colored-lighting', 'Цветной свет'], ['fantasy', 'Фэнтези'], ['foliage', 'Листва'],
+    ['path-tracing', 'Path tracing'], ['pbr', 'PBR'], ['realistic', 'Реализм'],
+    ['reflections', 'Отражения'], ['semi-realistic', 'Полуреализм'], ['shadows', 'Тени'],
+    ['vanilla-like', 'В духе ванили'],
+  ],
+  modpack: [
+    ['adventure', 'Приключения'], ['challenging', 'Сложные'], ['combat', 'Бой'],
+    ['kitchen-sink', 'Всего понемногу'], ['lightweight', 'Лёгкие'], ['magic', 'Магия'],
+    ['multiplayer', 'Для игры вместе'], ['optimization', 'Оптимизация'],
+    ['quests', 'Задания'], ['technology', 'Техника'],
+  ],
+};
+
 function shorten(text, max) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
@@ -19,11 +62,13 @@ function shorten(text, max) {
 
 /* ----------------------------- Modrinth ----------------------------- */
 
-async function searchModrinth({ query, gameVersion, loader, projectType = 'mod', limit = 30, offset = 0, sort = 'relevance' }) {
+async function searchModrinth({ query, gameVersion, loader, projectType = 'mod', limit = 30, offset = 0, sort = 'relevance', categories = [] }) {
   const facets = [['project_type:' + projectType]];
   if (gameVersion) facets.push(['versions:' + gameVersion]);
   // Ресурспаки и шейдеры не привязаны к загрузчику
   if (loader && loader !== 'vanilla' && projectType === 'mod') facets.push(['categories:' + loader]);
+  // Каждая выбранная категория — отдельная группа: между собой они складываются по И
+  for (const c of asList(categories)) facets.push(['categories:' + c]);
 
   const params = new URLSearchParams({
     query: query || '',
@@ -295,4 +340,9 @@ function remove(filePath) {
   fs.rmSync(filePath, { force: true });
 }
 
-module.exports = { search, versions, install, listInstalled, toggle, remove, TARGET_DIR };
+/** Категории для фильтра в интерфейсе. */
+function categoriesOf(projectType) {
+  return (MODRINTH_CATEGORIES[projectType] || []).map(([id, label]) => ({ id, label }));
+}
+
+module.exports = { search, versions, install, listInstalled, toggle, remove, categoriesOf, TARGET_DIR };

@@ -13,9 +13,14 @@
     busy: new Set(),
     logs: [],
     view: 'library',
-    modsQuery: { source: 'modrinth', type: 'mod', text: '', instanceId: null, sort: 'relevance' },
+    modsQuery: {
+      source: 'modrinth', type: 'mod', text: '', instanceId: null, sort: 'relevance',
+      category: '', anyVersion: false, anyLoader: false,
+    },
     modsResults: null,
     modsLoading: false,
+    modsOffset: 0,
+    modsCategories: {},
     appInfo: {},
     update: null,
     fonts: null,
@@ -29,11 +34,44 @@
     vpnCountries: null,
     vpnServers: null,
     vpnCountry: null,
+    myIp: null,
+    myIpError: null,
+    proxies: null,
+    proxyStatus: null,
+    proxyChecks: {},
     servers: null,
     friends: null,
   };
 
   const LOADER_GLYPH = { vanilla: 'MC', fabric: 'FA', quilt: 'QU', forge: 'FO', neoforge: 'NE' };
+
+  const MODS_PAGE = 30;
+
+  /**
+   * Переключение типа каталога всегда начинает с чистого листа: результаты, фильтры
+   * и запрос от прошлого типа не должны подмешиваться к новому.
+   */
+  function setModsType(type) {
+    if (state.modsQuery.type === type) return;
+    state.modsQuery.type = type;
+    state.modsQuery.category = '';
+    state.modsQuery.text = '';
+    state.modsResults = null;
+    state.modsOffset = 0;
+  }
+
+  /**
+   * Что реально уходит в запрос. Фильтры «любая версия» и «любой загрузчик» снимают
+   * ограничение по сборке — без них у свежих версий Minecraft каталог почти пуст.
+   */
+  function modsFilter(inst) {
+    const q = state.modsQuery;
+    const isModpack = q.type === 'modpack';
+    return {
+      gameVersion: isModpack || q.anyVersion || !inst ? null : inst.mcVersion,
+      loader: isModpack || q.anyLoader || q.type !== 'mod' || !inst ? null : inst.loader,
+    };
+  }
 
   /* ============================ Служебное ============================ */
 
@@ -74,6 +112,7 @@
     friends: { title: 'Друзья', subtitle: 'Общий список друзей и их открытые миры', render: renderFriends },
     servers: { title: 'Серверы', subtitle: 'Популярные публичные серверы с живым онлайном', render: renderServers },
     vpn: { title: 'VPN', subtitle: 'Бесплатные серверы VPN Gate с выбором страны', render: renderVpn },
+    ip: { title: 'Смена IP', subtitle: 'Подключение к серверам через прокси — без прав администратора', render: renderIp },
     settings: { title: 'Настройки', subtitle: 'Java, память и внешний вид', render: renderSettings },
     console: { title: 'Консоль', subtitle: 'Логи запуска и работы игры', render: renderConsole },
   };
@@ -103,6 +142,7 @@
   /* =========================== Библиотека =========================== */
 
   function renderLibrary(body, actions) {
+    actions.appendChild(button('Импорт', I.download, 'ghost sm', openImportDialog));
     actions.appendChild(button('Обновить', I.refresh, 'ghost sm', async () => {
       await loadInstances();
       render();
@@ -170,6 +210,8 @@
 
     actions.appendChild(iconButton(I.package, 'Каталог модов для этой сборки', () => {
       state.modsQuery.instanceId = inst.id;
+      // Каталог для сборки всегда открывается на модах, а не на том, что смотрели в прошлый раз
+      setModsType('mod');
       go('mods');
     }));
     actions.appendChild(iconButton(I.folder, 'Открыть папку', () => window.api.instances.openFolder(inst.id)));
@@ -177,6 +219,144 @@
 
     return row;
   }
+
+  /* ---------------------- Перенос сборок файлом ---------------------- */
+
+  /**
+   * Экспорт: выбираем, что вложить. Файлы самой игры не кладём — они одинаковы
+   * у всех и весят сотни мегабайт, при импорте нужная версия скачается заново.
+   */
+  async function openExportDialog(inst) {
+    let info;
+    try {
+      info = await window.api.io.inspect(inst.id);
+    } catch (e) {
+      toastErr('Не удалось прочитать сборку', e.message);
+      return;
+    }
+
+    const body = el('<div class="stack"></div>');
+    body.appendChild(el('<div class="hint">В файл попадут моды и настройки, но не файлы Minecraft: ' +
+      'на другой машине нужная версия и загрузчик скачаются сами.</div>'));
+
+    const chosen = new Set(info.parts.filter((p) => p.present && p.id !== 'saves').map((p) => p.id));
+    const list = el('<div class="io-parts"></div>');
+    for (const part of info.parts) {
+      const row = el(
+        '<label class="io-part' + (part.present ? '' : ' empty') + '">' +
+          '<input type="checkbox"' + (chosen.has(part.id) ? ' checked' : '') +
+            (part.present ? '' : ' disabled') + '>' +
+          '<span class="io-part-name">' + esc(part.label) + '</span>' +
+          '<span class="io-part-size">' + (part.present ? esc(formatSize(part.size)) : 'пусто') + '</span>' +
+        '</label>'
+      );
+      row.querySelector('input').addEventListener('change', (e) => {
+        if (e.target.checked) chosen.add(part.id); else chosen.delete(part.id);
+        updateTotal();
+      });
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+
+    const settingsRow = el('<label class="io-part"><input type="checkbox" checked>' +
+      '<span class="io-part-name">Параметры запуска сборки</span>' +
+      '<span class="io-part-size">память, разрешение, аргументы</span></label>');
+    body.appendChild(settingsRow);
+
+    const total = el('<div class="hint"></div>');
+    body.appendChild(total);
+    function updateTotal() {
+      const bytes = info.parts.filter((p) => chosen.has(p.id)).reduce((n, p) => n + p.size, 0);
+      total.textContent = 'Примерный размер файла: ' + formatSize(bytes) +
+        (chosen.has('saves') ? ' — миры весят больше всего остального' : '');
+    }
+    updateTotal();
+
+    const choice = await modal({
+      title: 'Экспорт сборки',
+      subtitle: inst.name + ' · Minecraft ' + inst.mcVersion,
+      body,
+      buttons: [
+        { label: 'Отмена', value: null },
+        { label: 'Сохранить в файл', kind: 'primary', value: 'save' },
+      ],
+    });
+    if (choice !== 'save') return;
+    if (!chosen.size) { toastErr('Нечего экспортировать', 'Отметьте хотя бы одну часть'); return; }
+
+    await guard('Не удалось экспортировать', async () => {
+      setStatus('Собираем файл сборки…', null, 'busy');
+      try {
+        const res = await window.api.io.export(inst.id, [...chosen],
+          settingsRow.querySelector('input').checked);
+        if (!res) return;   // окно сохранения закрыли
+        toastOk('Сборка сохранена', formatSize(res.size));
+        await window.api.io.reveal(res.file);
+      } finally {
+        setStatus('Готов к работе', 0, '');
+      }
+    });
+  }
+
+  /** Импорт: сначала показываем, что внутри файла, и только потом ставим. */
+  async function openImportDialog() {
+    let info;
+    try {
+      info = await window.api.io.pick();
+    } catch (e) {
+      toastErr('Не удалось прочитать файл', e.message);
+      return;
+    }
+    if (!info) return;   // выбор отменили
+
+    const body = el('<div class="stack"></div>');
+    body.appendChild(el(
+      '<div class="srv-stats">' +
+        '<div><b>' + esc(info.mcVersion) + '</b><span>Minecraft</span></div>' +
+        '<div><b>' + esc(LOADER_LABEL[info.loader] || info.loader) + '</b><span>Загрузчик</span></div>' +
+        '<div><b>' + esc(formatSize(info.size)) + '</b><span>Размер файла</span></div>' +
+      '</div>'
+    ));
+
+    if (info.folders.length) {
+      body.appendChild(el('<div class="io-parts">' + info.folders.map((f) =>
+        '<div class="io-part"><span class="io-part-name">' + esc(f.folder) + '</span>' +
+        '<span class="io-part-size">' + f.files + ' файлов</span></div>').join('') + '</div>'));
+    }
+
+    const nameField = el('<div class="field"><label>Название новой сборки</label>' +
+      '<input class="input" value="' + esc(info.name) + '"></div>');
+    body.appendChild(nameField);
+    body.appendChild(el('<span class="hint">Minecraft ' + esc(info.mcVersion) +
+      ' и загрузчик скачаются заново — сборка появится рядом с остальными, ничего не перезапишется.</span>'));
+
+    const choice = await modal({
+      title: 'Импорт сборки',
+      subtitle: info.name,
+      body,
+      buttons: [
+        { label: 'Отмена', value: null },
+        { label: 'Установить', kind: 'primary', value: 'import' },
+      ],
+    });
+    if (choice !== 'import') return;
+
+    await guard('Не удалось импортировать', async () => {
+      setStatus('Устанавливаем сборку из файла…', null, 'busy');
+      try {
+        const res = await window.api.io.import(info.file, nameField.querySelector('input').value.trim());
+        await loadInstances();
+        render();
+        toastOk('Сборка установлена', res.instance.name + ' · файлов: ' + res.files);
+      } finally {
+        setStatus('Готов к работе', 0, '');
+      }
+    });
+  }
+
+  const LOADER_LABEL = {
+    vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge',
+  };
 
   const INSTANCE_SECTIONS = [
     { id: 'log', label: 'Журнал', icon: 'terminal' },
@@ -355,7 +535,7 @@
 
       const info = ensure('components', () => window.api.inst.components(inst.id), main, 160);
       if (info) {
-        const table = el('<div class="grid-table"></div>');
+        const table = el('<div class="grid-table gt-components"></div>');
         table.appendChild(el(
           '<div class="gt-head"><span>Компонент</span><span>Версия</span><span>Обязателен</span></div>'
         ));
@@ -391,6 +571,10 @@
       }));
       aside.appendChild(button('Папка сборки', I.folder, 'sm block', () => window.api.instances.openFolder(inst.id)));
       aside.appendChild(button('Папка библиотек', I.folder, 'sm block', () => window.api.app.reveal('root')));
+      aside.appendChild(button('Экспорт в файл', I.upload, 'sm block', () => {
+        window.UI.closeModal();
+        openExportDialog(inst);
+      }));
       aside.appendChild(button('Дублировать', I.copy, 'sm block', async () => {
         window.UI.closeModal();
         await guard('Не удалось дублировать', async () => {
@@ -436,10 +620,9 @@
 
       // Каталог открывается здесь же — уходить из окна сборки не нужно
       aside.appendChild(button('Скачать', I.download, 'primary sm block', () => {
-        ui.catalogType = opts.catalogType;
-        ui.catalogBack = ui.section;
-        ui.section = 'catalog';
-        paint();
+        // Каждый раздел открывает свой каталог с чистого листа: результаты и запрос
+        // от прошлого типа не должны показываться под чужим заголовком
+        openCatalog(opts.catalogType, ui.section);
       }));
       aside.appendChild(button('Добавить файлы', I.plus, 'sm block', async () => {
         await guard('Не удалось добавить файлы', async () => {
@@ -915,7 +1098,7 @@
       );
 
       wrap.querySelector('[data-role="back"]').appendChild(
-        button('Назад', I.rows, 'sm', () => { ui.section = ui.catalogBack || 'mods'; paint(); })
+        button('Назад', I.arrowLeft, 'sm', () => { ui.section = ui.catalogBack || 'mods'; paint(); })
       );
 
       /* --- Панель поиска --- */
@@ -924,11 +1107,7 @@
       const typeSeg = el('<div class="seg"></div>');
       for (const t of CATALOG_TYPES) {
         const btn = el('<button' + (t.id === type ? ' class="active"' : '') + '>' + esc(t.label) + '</button>');
-        btn.addEventListener('click', () => {
-          ui.catalogType = t.id;
-          ui.catalogResults = null;
-          paint();
-        });
+        btn.addEventListener('click', () => openCatalog(t.id, ui.catalogBack));
         typeSeg.appendChild(btn);
       }
       tools.appendChild(typeSeg);
@@ -953,11 +1132,69 @@
         btn.addEventListener('click', () => {
           ui.catalogSource = src[0];
           ui.catalogResults = null;
+          ui.catalogOffset = 0;
           paint();
         });
         srcSeg.appendChild(btn);
       }
       tools.appendChild(srcSeg);
+
+      /* --- Фильтры --- */
+      const f = catalogFilters();
+      const bar = el('<div class="filter-bar"></div>');
+      bar.appendChild(el('<span class="filter-label">' + I.filter + 'Фильтры</span>'));
+
+      if ((ui.catalogSource || 'modrinth') === 'modrinth') {
+        const cats = (ui.catalogCategories || {})[type];
+        const catSel = el('<select class="select sm" style="width:170px"></select>');
+        catSel.innerHTML = '<option value="">Все категории</option>' +
+          (cats || []).map((c) => '<option value="' + esc(c.id) + '">' + esc(c.label) + '</option>').join('');
+        catSel.value = f.category || '';
+        catSel.addEventListener('change', () => {
+          f.category = catSel.value;
+          ui.catalogResults = null;
+          ui.catalogOffset = 0;
+          paint();
+        });
+        bar.appendChild(catSel);
+        if (!cats) {
+          window.api.mods.categories(type).then((list) => {
+            ui.catalogCategories = { ...(ui.catalogCategories || {}), [type]: list || [] };
+            if (ui.section === 'catalog') paint();
+          }).catch(() => {
+            ui.catalogCategories = { ...(ui.catalogCategories || {}), [type]: [] };
+          });
+        }
+      } else {
+        bar.appendChild(el('<span class="muted" style="font-size:12px">У CurseForge фильтр по категориям не поддерживается</span>'));
+      }
+
+      bar.appendChild(toggleChip('Любая версия', f.anyVersion,
+        'Не ограничивать выдачу версией сборки (' + inst.mcVersion + ')', (on) => {
+          f.anyVersion = on;
+          ui.catalogResults = null;
+          ui.catalogOffset = 0;
+          paint();
+        }));
+      if (type === 'mod' && inst.loader !== 'vanilla') {
+        bar.appendChild(toggleChip('Любой загрузчик', f.anyLoader,
+          'Не ограничивать выдачу загрузчиком ' + (inst.loaderLabel || inst.loader), (on) => {
+            f.anyLoader = on;
+            ui.catalogResults = null;
+            ui.catalogOffset = 0;
+            paint();
+          }));
+      }
+      if (f.category || f.anyVersion || f.anyLoader || ui.catalogQuery) {
+        bar.appendChild(button('Сбросить', I.x, 'ghost sm', () => {
+          ui.catalogFilters = null;
+          ui.catalogQuery = '';
+          ui.catalogResults = null;
+          ui.catalogOffset = 0;
+          paint();
+        }));
+      }
+      wrap.querySelector('.cat-tools').after(bar);
 
       target.appendChild(wrap);
 
@@ -966,41 +1203,122 @@
       if (!ui.catalogResults) {
         results.innerHTML = '<div class="skeleton" style="height:62px"></div>' +
           '<div class="skeleton" style="height:62px;margin-top:9px"></div>';
-        const token = ++catalogToken;
-        window.api.mods.search({
-          source: ui.catalogSource || 'modrinth',
-          query: ui.catalogQuery || '',
-          gameVersion: inst.mcVersion,
-          loader: type === 'mod' ? inst.loader : null,
-          projectType: type,
-          limit: 24,
-          sort: (ui.catalogQuery || '') ? 'relevance' : 'downloads',
-        }).then((data) => {
-          if (token !== catalogToken) return;
-          ui.catalogResults = data.items || [];
-          paint();
-        }).catch((e) => {
-          if (token !== catalogToken) return;
-          ui.catalogResults = [];
-          ui.catalogError = e.message;
-          paint();
-        });
+        loadCatalogPage(false);
       } else if (ui.catalogError) {
         results.appendChild(el('<div class="net-note err">' + esc(ui.catalogError) + '</div>'));
         ui.catalogError = null;
       } else if (!ui.catalogResults.length) {
-        results.appendChild(el('<div class="version-empty">Ничего не найдено под Minecraft ' +
-          esc(inst.mcVersion) + '</div>'));
+        const empty = el('<div class="empty" style="padding:30px">' + I.search +
+          '<h3>Ничего не найдено</h3><p>' +
+          (f.anyVersion
+            ? 'Попробуйте другой запрос или снимите фильтр по категории.'
+            : 'Каталог ограничен версией сборки — Minecraft ' + esc(inst.mcVersion) +
+              '. Под свежие версии выходит далеко не всё.') + '</p></div>');
+        if (!f.anyVersion) {
+          empty.appendChild(button('Показать под любую версию', I.filter, 'primary sm', () => {
+            f.anyVersion = true;
+            f.anyLoader = true;
+            ui.catalogResults = null;
+            ui.catalogOffset = 0;
+            paint();
+          }));
+        }
+        results.appendChild(empty);
       } else {
         for (const item of ui.catalogResults) results.appendChild(catalogRow(item, type));
+
+        const total = ui.catalogTotal || ui.catalogResults.length;
+        const foot = el('<div class="list-foot"><span class="muted">Показано ' +
+          ui.catalogResults.length + ' из ' + formatCount(total) + '</span></div>');
+        if (ui.catalogResults.length < total) {
+          const more = button('Показать ещё', I.download, 'sm', () => {
+            more.disabled = true;
+            more.textContent = 'Загружаем…';
+            loadCatalogPage(true);
+          });
+          foot.appendChild(more);
+        }
+        results.appendChild(foot);
       }
 
       /* --- Корзина --- */
       renderCart(wrap.querySelector('[data-role="cart"]'));
     }
 
+    /** Фильтры каталога живут на ui, чтобы переживать перерисовку окна сборки. */
+    function catalogFilters() {
+      if (!ui.catalogFilters) ui.catalogFilters = { category: '', anyVersion: false, anyLoader: false };
+      return ui.catalogFilters;
+    }
+
+    /** Страница выдачи. append дописывает следующую порцию к уже показанному. */
+    function loadCatalogPage(append) {
+      const type = ui.catalogType || 'mod';
+      const f = catalogFilters();
+      const token = ++catalogToken;
+      const offset = append ? (ui.catalogOffset || 0) : 0;
+
+      window.api.mods.search({
+        source: ui.catalogSource || 'modrinth',
+        query: ui.catalogQuery || '',
+        gameVersion: f.anyVersion ? null : inst.mcVersion,
+        loader: type === 'mod' && !f.anyLoader ? inst.loader : null,
+        projectType: type,
+        categories: (ui.catalogSource || 'modrinth') === 'modrinth' && f.category ? [f.category] : [],
+        limit: 24,
+        offset,
+        sort: (ui.catalogQuery || '') ? 'relevance' : 'downloads',
+      }).then((data) => {
+        if (token !== catalogToken) return;
+        const items = data.items || [];
+        ui.catalogResults = append ? [...(ui.catalogResults || []), ...items] : items;
+        ui.catalogTotal = data.total || ui.catalogResults.length;
+        ui.catalogOffset = offset + items.length;
+        paint();
+      }).catch((e) => {
+        if (token !== catalogToken) return;
+        if (append) {
+          toastErr('Не удалось загрузить ещё', e.message);
+          paint();
+          return;
+        }
+        ui.catalogResults = [];
+        ui.catalogError = e.message;
+        paint();
+      });
+    }
+
+    /** Переход в каталог: тип задаёт и корзину, и фильтры, поэтому чужое состояние сбрасываем. */
+    function openCatalog(type, backSection) {
+      const changed = (ui.catalogType || 'mod') !== type;
+      ui.catalogType = type;
+      ui.catalogBack = backSection || ui.catalogBack || 'mods';
+      if (changed) {
+        ui.catalogQuery = '';
+        ui.catalogFilters = null;
+      }
+      ui.catalogResults = null;
+      ui.catalogTotal = 0;
+      ui.catalogOffset = 0;
+      ui.section = 'catalog';
+      paint();
+    }
+
+    /** Корзина у каждого типа своя — моды не смешиваются с шейдерами. */
+    function cart() {
+      const type = ui.catalogType || 'mod';
+      ui.carts = ui.carts || {};
+      ui.carts[type] = ui.carts[type] || [];
+      return ui.carts[type];
+    }
+
+    function setCart(list) {
+      ui.carts = ui.carts || {};
+      ui.carts[ui.catalogType || 'mod'] = list;
+    }
+
     function inCart(item) {
-      return (ui.cart || []).some((c) => c.item.id === item.id && c.item.source === item.source);
+      return cart().some((c) => c.item.id === item.id && c.item.source === item.source);
     }
 
     function catalogRow(item, type) {
@@ -1036,18 +1354,21 @@
           add.disabled = true;
           add.textContent = 'Ищем версию…';
           try {
+            // Ограничения те же, что и в поиске: иначе найденное «под любую версию»
+            // не нашло бы ни одного файла
+            const f = catalogFilters();
             const versions = await window.api.mods.versions({
               source: item.source,
               projectId: item.id,
-              gameVersion: inst.mcVersion,
-              loader: type === 'mod' ? inst.loader : null,
+              gameVersion: f.anyVersion ? null : inst.mcVersion,
+              loader: type === 'mod' && !f.anyLoader ? inst.loader : null,
             });
             if (!versions.length) {
               toastErr('Нет подходящей версии', item.name + ' не поддерживает Minecraft ' + inst.mcVersion);
               return;
             }
             const best = versions.find((v) => v.channel === 'release') || versions[0];
-            ui.cart = [...(ui.cart || []), { item, version: best, versions, projectType: type, checked: true }];
+            setCart([...cart(), { item, version: best, versions, projectType: type, checked: true }]);
             paint();
           } catch (e) {
             toastErr('Не удалось получить версии', e.message);
@@ -1062,19 +1383,20 @@
     }
 
     function renderCart(host) {
-      const cart = ui.cart || [];
-      const checked = cart.filter((c) => c.checked);
+      const list0 = cart();
+      const checked = list0.filter((c) => c.checked);
+      const label = (CATALOG_TYPES.find((t) => t.id === (ui.catalogType || 'mod')) || CATALOG_TYPES[0]).label;
 
-      host.appendChild(el('<div class="cart-title">Корзина · ' + cart.length + '</div>'));
+      host.appendChild(el('<div class="cart-title">Корзина · ' + esc(label.toLowerCase()) + ' · ' + list0.length + '</div>'));
 
-      if (!cart.length) {
+      if (!list0.length) {
         host.appendChild(el('<div class="cart-empty">Пока пусто. Нажимайте «В корзину» — ' +
           'скачаете всё одним разом.</div>'));
         return;
       }
 
       const list = el('<div class="cart-list"></div>');
-      for (const entry of cart) {
+      for (const entry of list0) {
         const row = el(
           '<div class="cart-row' + (entry.checked ? '' : ' off') + '">' +
             '<label class="check"><input type="checkbox"' + (entry.checked ? ' checked' : '') + '></label>' +
@@ -1087,7 +1409,7 @@
           paint();
         });
         row.appendChild(iconButton(I.x, 'Убрать из корзины', () => {
-          ui.cart = cart.filter((c) => c !== entry);
+          setCart(list0.filter((c) => c !== entry));
           paint();
         }));
         list.appendChild(row);
@@ -1100,13 +1422,13 @@
       host.appendChild(download);
 
       host.appendChild(button('Очистить корзину', I.trash, 'sm block', () => {
-        ui.cart = [];
+        setCart([]);
         paint();
       }));
     }
 
     async function downloadCart() {
-      const queue = (ui.cart || []).filter((c) => c.checked);
+      const queue = cart().filter((c) => c.checked);
       if (!queue.length) return;
 
       setStatus('Скачивание: 0 из ' + queue.length, 0, 'busy');
@@ -1125,7 +1447,7 @@
       }
 
       // Скачанное убираем, невыбранное остаётся ждать в корзине
-      ui.cart = (ui.cart || []).filter((c) => !c.checked);
+      setCart(cart().filter((c) => !c.checked));
       delete ui.data.mods;
       delete ui.data.resourcepacks;
       delete ui.data.shaderpacks;
@@ -1597,6 +1919,8 @@
     render();
     setStatus('Подготовка к запуску…', 0, 'busy');
 
+    const via = server && state.proxyStatus && state.proxyStatus.connected ? state.proxyStatus.proxy : null;
+    if (via) toast('Подключение через прокси', server + ' · ' + via.label);
     try {
       await window.api.game.launch(id, server || null);
     } catch (e) {
@@ -1631,8 +1955,7 @@
         '</div>'
       );
       empty.appendChild(button('Смотреть готовые сборки', I.package, 'primary sm', () => {
-        state.modsQuery.type = 'modpack';
-        state.modsResults = null;
+        setModsType('modpack');
         render();
       }));
       body.appendChild(empty);
@@ -1707,8 +2030,7 @@
     );
     typeSel.value = state.modsQuery.type;
     typeSel.addEventListener('change', () => {
-      state.modsQuery.type = typeSel.value;
-      state.modsResults = null;
+      setModsType(typeSel.value);
       render();
     });
     toolbar.appendChild(typeSel);
@@ -1728,6 +2050,7 @@
     toolbar.appendChild(sortSel);
 
     body.appendChild(toolbar);
+    body.appendChild(filterBar(inst));
 
     body.appendChild(el(
       isModpack
@@ -1746,34 +2069,120 @@
     if (state.modsResults === null && !state.modsLoading) searchMods();
   }
 
+  /**
+   * Строка фильтров под поиском. Главное здесь — «любая версия»: по умолчанию каталог
+   * ограничен версией сборки, и на свежей Minecraft подходящих проектов единицы.
+   */
+  function filterBar(inst) {
+    const q = state.modsQuery;
+    const isModpack = q.type === 'modpack';
+    const bar = el('<div class="filter-bar"></div>');
+    bar.appendChild(el('<span class="filter-label">' + I.filter + 'Фильтры</span>'));
+
+    /* Категории есть только у Modrinth — у CurseForge своя система, её не подменяем */
+    if (q.source === 'modrinth') {
+      const cats = state.modsCategories[q.type];
+      const catSel = el('<select class="select sm" style="width:170px"></select>');
+      catSel.innerHTML = '<option value="">Все категории</option>' +
+        (cats || []).map((c) => '<option value="' + esc(c.id) + '">' + esc(c.label) + '</option>').join('');
+      catSel.value = q.category || '';
+      catSel.addEventListener('change', () => {
+        q.category = catSel.value;
+        searchMods();
+      });
+      bar.appendChild(catSel);
+      if (!cats) {
+        window.api.mods.categories(q.type).then((list) => {
+          state.modsCategories[q.type] = list || [];
+          if (state.view === 'mods') render();
+        }).catch(() => { state.modsCategories[q.type] = []; });
+      }
+    } else {
+      bar.appendChild(el('<span class="muted" style="font-size:12px">У CurseForge фильтр по категориям не поддерживается</span>'));
+    }
+
+    if (!isModpack && inst) {
+      bar.appendChild(toggleChip('Любая версия', q.anyVersion,
+        'Не ограничивать выдачу версией сборки (' + inst.mcVersion + ')', (on) => {
+          q.anyVersion = on;
+          searchMods();
+        }));
+      if (q.type === 'mod' && inst.loader !== 'vanilla') {
+        bar.appendChild(toggleChip('Любой загрузчик', q.anyLoader,
+          'Не ограничивать выдачу загрузчиком ' + (inst.loaderLabel || inst.loader), (on) => {
+            q.anyLoader = on;
+            searchMods();
+          }));
+      }
+    }
+
+    const dirty = q.category || q.anyVersion || q.anyLoader || q.text;
+    if (dirty) {
+      bar.appendChild(button('Сбросить', I.x, 'ghost sm', () => {
+        q.category = '';
+        q.anyVersion = false;
+        q.anyLoader = false;
+        q.text = '';
+        state.modsResults = null;
+        state.modsOffset = 0;
+        render();
+      }));
+    }
+    return bar;
+  }
+
+  /** Фильтр-переключатель: то же, что галочка, но читается как тег. */
+  function toggleChip(label, active, title, onChange) {
+    const chip = el('<button class="filter-chip' + (active ? ' active' : '') + '" title="' + esc(title || '') + '">' +
+      esc(label) + '</button>');
+    chip.addEventListener('click', () => onChange(!active));
+    return chip;
+  }
+
   let searchToken = 0;
 
-  async function searchMods() {
+  /**
+   * Поиск по каталогу. append=true дописывает следующую страницу к уже показанному,
+   * поэтому «Показать ещё» не перерисовывает и не дёргает весь список.
+   */
+  async function searchMods({ append = false } = {}) {
     const isModpack = state.modsQuery.type === 'modpack';
     const inst = state.instances.find((i) => i.id === state.modsQuery.instanceId) || null;
     if (!isModpack && !inst) return;
     // Ответ устаревшего запроса не должен перетирать актуальный результат
     const token = ++searchToken;
     state.modsLoading = true;
+    if (!append) state.modsOffset = 0;
+    const offset = append ? state.modsOffset : 0;
+
     const host = $('#mod-results');
-    if (host) {
+    if (host && !append) {
       host.innerHTML = '<div class="skeleton"></div><div class="skeleton" style="margin-top:10px"></div><div class="skeleton" style="margin-top:10px"></div>';
     }
     try {
+      const { gameVersion, loader } = modsFilter(inst);
       const data = await window.api.mods.search({
         source: state.modsQuery.source,
         query: state.modsQuery.text,
-        gameVersion: isModpack ? null : inst.mcVersion,
-        loader: isModpack ? null : inst.loader,
+        gameVersion,
+        loader,
         projectType: state.modsQuery.type,
         sort: state.modsQuery.sort,
-        limit: 30,
+        categories: state.modsQuery.source === 'modrinth' && state.modsQuery.category
+          ? [state.modsQuery.category] : [],
+        limit: MODS_PAGE,
+        offset,
       });
       if (token !== searchToken) return;
-      state.modsResults = data;
+      const items = data.items || [];
+      state.modsResults = append && state.modsResults && !state.modsResults.error
+        ? { ...data, items: [...state.modsResults.items, ...items] }
+        : data;
+      state.modsOffset = offset + items.length;
     } catch (e) {
       if (token !== searchToken) return;
-      state.modsResults = { items: [], total: 0, error: e.message };
+      if (append) toastErr('Не удалось загрузить ещё', e.message);
+      else state.modsResults = { items: [], total: 0, error: e.message };
     } finally {
       if (token === searchToken) {
         state.modsLoading = false;
@@ -1802,19 +2211,46 @@
     }
 
     if (!data.items.length) {
-      host.appendChild(el(
+      const q = state.modsQuery;
+      const narrowed = inst && !q.anyVersion && q.type !== 'modpack';
+      const empty = el(
         '<div class="empty">' + I.search +
           '<h3>Ничего не найдено</h3>' +
-          '<p>' + (inst
-            ? 'Попробуйте другой запрос или проверьте, поддерживает ли он Minecraft ' +
-              esc(inst.mcVersion) + ' с загрузчиком ' + esc(inst.loaderLabel || inst.loader) + '.'
-            : 'Попробуйте изменить запрос.') + '</p>' +
+          '<p>' + (narrowed
+            ? 'Каталог ограничен версией сборки — Minecraft ' + esc(inst.mcVersion) +
+              (q.type === 'mod' && !q.anyLoader && inst.loader !== 'vanilla'
+                ? ' и загрузчиком ' + esc(inst.loaderLabel || inst.loader) : '') +
+              '. Под свежие версии подходит далеко не всё — снимите ограничение и посмотрите остальное.'
+            : 'Попробуйте изменить запрос или сбросить фильтры.') + '</p>' +
         '</div>'
-      ));
+      );
+      if (narrowed) {
+        empty.appendChild(button('Показать под любую версию', I.filter, 'primary sm', () => {
+          q.anyVersion = true;
+          q.anyLoader = true;
+          render();
+        }));
+      }
+      host.appendChild(empty);
       return;
     }
 
     for (const item of data.items) host.appendChild(modCard(item, inst));
+
+    /* Сколько показано из скольких и подгрузка следующей страницы */
+    const total = data.total || data.items.length;
+    const foot = el('<div class="list-foot"><span class="muted">Показано ' + data.items.length +
+      ' из ' + formatCount(total) + '</span></div>');
+    if (data.items.length < total) {
+      const more = button(state.modsLoading ? 'Загружаем…' : 'Показать ещё', I.download, 'sm', async () => {
+        more.disabled = true;
+        more.textContent = 'Загружаем…';
+        await searchMods({ append: true });
+      });
+      more.disabled = state.modsLoading;
+      foot.appendChild(more);
+    }
+    host.appendChild(foot);
   }
 
   function modCard(item, inst) {
@@ -1856,12 +2292,15 @@
     if (sourceBtn) { sourceBtn.disabled = true; sourceBtn.textContent = 'Загрузка…'; }
     let list;
     try {
+      // У готовой сборки своя версия игры и свой загрузчик — фильтровать по текущей нельзя.
+      // Для остального берём те же ограничения, что и в поиске, иначе найденное «под любую
+      // версию» открывалось бы с пустым списком файлов.
+      const filter = modsFilter(inst);
       list = await window.api.mods.versions({
         source: item.source,
         projectId: item.id,
-        // У готовой сборки своя версия игры и свой загрузчик — фильтровать по текущей нельзя
-        gameVersion: isModpack ? null : inst.mcVersion,
-        loader: state.modsQuery.type === 'mod' ? inst.loader : null,
+        gameVersion: isModpack ? null : filter.gameVersion,
+        loader: filter.loader,
       });
     } catch (e) {
       toastErr('Не удалось получить версии', e.message);
@@ -2540,6 +2979,7 @@
         '</div>' +
         '<div class="srv-name">' + esc(server.name) + '</div>' +
         '<div class="srv-addr">' + esc(server.address) + '</div>' +
+        licenseChip(server.licensed) +
         '<div class="srv-foot">' +
           (server.online
             ? '<span class="srv-ping ' + pingClass(server.latency) + '">' + server.latency + ' мс</span>' +
@@ -2552,6 +2992,17 @@
     if (img) img.addEventListener('error', () => { img.parentElement.textContent = server.name.slice(0, 2).toUpperCase(); });
     card.addEventListener('click', () => openServerCard(server));
     return card;
+  }
+
+  /**
+   * Отметка о лицензии. Сервер такого не сообщает по протоколу опроса —
+   * значение берётся из списка в servers.js.
+   */
+  function licenseChip(licensed) {
+    if (licensed == null) return '';
+    return licensed
+      ? '<span class="srv-lic yes">Лицензия</span>'
+      : '<span class="srv-lic no">Без лицензии</span>';
   }
 
   function pingClass(ms) {
@@ -2585,6 +3036,23 @@
         '<div><b>' + esc(server.region) + '</b><span>Регион</span></div>' +
       '</div>'
     ));
+
+    body.appendChild(el(
+      '<div class="srv-lic-row ' + (server.licensed ? 'yes' : 'no') + '">' +
+        (server.licensed ? I.key : I.check) +
+        '<div><b>' + (server.licensed ? 'Нужна лицензия' : 'Лицензия не нужна') + '</b>' +
+        '<span>' + (server.licensed
+          ? 'Вход только с лицензионной учётной записью Minecraft — офлайн-профиль сервер отклонит.'
+          : 'Пускает и с офлайн-профилем: подойдёт любой ник из раздела «Аккаунты».') +
+        '</span></div>' +
+      '</div>'
+    ));
+
+    const account = activeAccount();
+    if (server.licensed && account && account.type !== 'microsoft') {
+      body.appendChild(el('<div class="net-note err">Сейчас выбран офлайн-профиль «' +
+        esc(account.name || '') + '». Этот сервер его не пустит — войдите через Microsoft.</div>'));
+    }
 
     if (!server.online) {
       body.appendChild(el('<div class="net-note err">Сервер не ответил: ' +
@@ -2685,43 +3153,44 @@
 
     /* --- Состояние подключения --- */
     const st = state.vpn || {};
-    const statusPanel = el(
-      '<div class="panel">' +
-        '<h2>' + (st.connected ? 'VPN подключён' : 'VPN отключён') + '</h2>' +
-        '<p class="panel-sub">' +
-          (st.connected && st.server
-            ? esc(countryName(st.server.country) + ' · ' + st.server.ip)
-            : 'Список серверов — открытый проект VPN Gate университета Цукубы. ' +
-              'Серверы поднимают добровольцы, поэтому доступ бесплатный.') +
-        '</p>' +
-      '</div>'
-    );
 
-    const statusRow = el('<div class="row"><div class="row-info" data-role="info"></div></div>');
-    const statusInfo = statusRow.querySelector('[data-role="info"]');
-    const statusCtl = el('<div class="row-ctl"></div>');
+    body.appendChild(netHero({
+      on: st.connected,
+      onLabel: 'Соединение защищено',
+      offLabel: 'Соединение не защищено',
+      subtitle: st.connected && st.server
+        ? 'Через ' + esc(countryName(st.server.country)) + ' · ' + esc(st.server.ip) +
+          ' · с ' + esc(formatDate(st.since))
+        : 'Весь трафик идёт напрямую, без промежуточного сервера',
+      action: st.connected
+        ? button('Отключить', I.power, 'danger', async () => {
+          await guard('Не удалось отключить', async () => {
+            await window.api.vpn.disconnect();
+            state.vpn = await window.api.vpn.status();
+            state.myIp = null;   // адрес поменялся — перезапросим
+            render();
+          });
+        })
+        : null,
+    }));
 
-    if (st.connected) {
-      statusInfo.innerHTML = '<b>Соединение активно</b><span>Подключено ' +
-        esc(formatDate(st.since)) + '</span>';
-      statusCtl.appendChild(button('Отключить', I.power, 'danger sm', async () => {
-        await guard('Не удалось отключить', async () => {
-          await window.api.vpn.disconnect();
-          state.vpn = await window.api.vpn.status();
-          render();
-        });
-      }));
-    } else if (!st.openvpn) {
-      statusInfo.innerHTML = '<b>OpenVPN не установлен</b>' +
-        '<span>Без него лаунчер может только подготовить файл настройки — подключение выполняет клиент OpenVPN</span>';
-      statusCtl.appendChild(button('Скачать OpenVPN', I.external, 'sm',
+    /* Системный VPN поднимает клиент OpenVPN: свой туннель требует драйвера адаптера */
+    if (!st.connected && !st.openvpn) {
+      const row = el(
+        '<div class="net-note" style="margin-bottom:12px">' +
+        '<b style="color:var(--text)">OpenVPN не установлен.</b> Системный VPN меняет маршруты ' +
+        'всей машины, поэтому его поднимает отдельный клиент с правами администратора. ' +
+        'Без него лаунчер может только сохранить файл настройки. ' +
+        'Если нужен адрес только для игры и без установки — воспользуйтесь разделом «Смена IP».' +
+        '</div>'
+      );
+      const actions2 = el('<div class="net-hero-act" style="margin:-4px 0 16px"></div>');
+      actions2.appendChild(button('Скачать OpenVPN', I.external, 'sm',
         () => window.api.app.openExternal('https://openvpn.net/community-downloads/')));
-    } else {
-      statusInfo.innerHTML = '<b>Готов к подключению</b><span>OpenVPN найден: ' + esc(st.openvpn) + '</span>';
+      actions2.appendChild(button('Открыть «Смена IP»', I.globe, 'sm', () => go('ip')));
+      body.appendChild(row);
+      body.appendChild(actions2);
     }
-    statusRow.appendChild(statusCtl);
-    statusPanel.appendChild(statusRow);
-    body.appendChild(statusPanel);
 
     body.appendChild(el(
       '<div class="net-note" style="margin-bottom:16px">Трафик пойдёт через сервер добровольца, ' +
@@ -2806,6 +3275,7 @@
         await guard('Не удалось подключиться', async () => {
           await window.api.vpn.connect(server.id);
           state.vpn = await window.api.vpn.status();
+          state.myIp = null;   // адрес сменился — перезапросим
           render();
         });
       }));
@@ -2828,6 +3298,265 @@
       state.vpnServers = await window.api.vpn.servers(code);
       render();
     });
+  }
+
+  /* ============================ Смена IP ============================ */
+
+  /**
+   * Раздел смены IP. Игра подключается к локальному порту лаунчера, а тот уже
+   * тянет соединение через SOCKS5-прокси — прав администратора это не требует.
+   * Меняется адрес только у подключений, которые начинает сам лаунчер.
+   */
+  function renderIp(body, actions) {
+    actions.appendChild(button('Обновить IP', I.refresh, 'ghost sm', () => {
+      state.myIp = null;
+      state.myIpError = null;
+      render();
+    }));
+    actions.appendChild(button('Добавить прокси', I.plus, 'ghost sm', openProxyDialog));
+
+    const st = state.proxyStatus || { connected: false };
+    body.appendChild(netHero({
+      on: st.connected,
+      onLabel: 'IP подменяется',
+      offLabel: 'IP настоящий',
+      subtitle: st.connected && st.proxy
+        ? 'Подключения к серверам идут через ' + esc(st.proxy.label)
+        : 'Подключения к серверам идут напрямую, с вашего адреса',
+      viaIp: activeProxyIp(st),
+      action: st.connected
+        ? button('Отключить', I.power, 'danger', async () => {
+          await guard('Не удалось отключить', async () => {
+            state.proxyStatus = await window.api.proxy.stop();
+            toastOk('Смена IP выключена', 'Подключения снова идут напрямую');
+            render();
+          });
+        })
+        : null,
+    }));
+
+    body.appendChild(el(
+      '<div class="net-note" style="margin-bottom:16px">Меняется адрес только тех подключений, ' +
+      'которые начинает лаунчер: кнопка «Подключиться» в разделе «Серверы» и запуск сразу на сервере. ' +
+      'Сервер, вписанный руками внутри игры, пойдёт напрямую. Системный трафик и другие программы ' +
+      'это не затрагивает.</div>'
+    ));
+
+    /* --- Список прокси --- */
+    if (!state.proxies) {
+      body.appendChild(el('<div class="skeleton" style="height:80px"></div>'));
+      loadProxies().then(() => { if (state.view === 'ip') render(); });
+      return;
+    }
+
+    const panel = el(
+      '<div class="panel"><h2>Прокси</h2>' +
+      '<p class="panel-sub">Свои SOCKS5-серверы. Проверка показывает, какой адрес видит внешний мир — ' +
+      'по нему и понятно, поменялся IP или нет.</p><div data-role="list"></div></div>'
+    );
+    const host = panel.querySelector('[data-role="list"]');
+
+    if (!state.proxies.length) {
+      const empty = el(
+        '<div class="net-empty">' + I.globe +
+          '<b>Прокси пока нет</b>' +
+          '<span>Добавьте адрес SOCKS5-сервера — свой на VPS или тот, что вам дали.</span>' +
+        '</div>'
+      );
+      empty.appendChild(button('Добавить прокси', I.plus, 'primary sm', openProxyDialog));
+      host.appendChild(empty);
+    } else {
+      const list = el('<div class="stack" style="gap:9px"></div>');
+      for (const p of state.proxies) list.appendChild(proxyRow(p, st));
+      host.appendChild(list);
+    }
+    body.appendChild(panel);
+  }
+
+  function proxyRow(proxy, st) {
+    const isActive = st.connected && st.proxy && st.proxy.id === proxy.id;
+    const check = state.proxyChecks[proxy.id] || proxy.lastCheck || null;
+    const alive = Boolean(check && check.ok !== false && check.ip);
+
+    let meta;
+    if (alive) {
+      meta = 'на выходе ' + check.ip + (check.country ? ' · ' + check.country : '') +
+        (check.latency ? ' · ' + check.latency + ' мс' : '');
+    } else if (check && check.ok === false) {
+      meta = 'не отвечает: ' + (check.error || 'неизвестная ошибка');
+    } else {
+      meta = 'ещё не проверялся';
+    }
+
+    const row = el(
+      '<div class="proxy-row' + (isActive ? ' active' : '') + '">' +
+        '<div class="proxy-dot' + (alive ? ' ok' : check ? ' bad' : '') + '"></div>' +
+        '<div class="grow" style="min-width:0">' +
+          '<b>' + esc(proxy.label) + '</b>' +
+          '<div class="muted" style="font-size:11.5px">' + esc(proxy.host + ':' + proxy.port) +
+            (proxy.username ? ' · вход по логину' : '') + ' · ' + esc(meta) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+
+    const ctl = el('<div class="row-ctl"></div>');
+    const checkBtn = button('Проверить', I.refresh, 'sm', async () => {
+      checkBtn.disabled = true;
+      checkBtn.textContent = 'Проверяем…';
+      try {
+        const res = await window.api.proxy.check(proxy.id);
+        state.proxyChecks[proxy.id] = res;
+        if (res.ok) toastOk('Прокси работает', 'Внешний адрес: ' + res.ip);
+        else toastErr('Прокси не отвечает', res.error);
+      } catch (e) {
+        toastErr('Не удалось проверить', e.message);
+      } finally {
+        render();
+      }
+    });
+    ctl.appendChild(checkBtn);
+
+    if (isActive) {
+      ctl.appendChild(el('<span class="chip" style="color:var(--ok);border-color:rgba(156,175,136,.4)">включён</span>'));
+    } else {
+      ctl.appendChild(button('Включить', I.power, 'primary sm', async () => {
+        await guard('Не удалось включить', async () => {
+          state.proxyStatus = await window.api.proxy.start(proxy.id);
+          toastOk('Смена IP включена', 'Подключения к серверам пойдут через ' + proxy.label);
+          render();
+        });
+      }));
+    }
+
+    ctl.appendChild(iconButton(I.trash, 'Удалить прокси', async () => {
+      const yes = await confirm('Удалить прокси?', proxy.label + ' — ' + proxy.host + ':' + proxy.port, true);
+      if (!yes) return;
+      await guard('Не удалось удалить', async () => {
+        await window.api.proxy.remove(proxy.id);
+        delete state.proxyChecks[proxy.id];
+        await loadProxies();
+        render();
+      });
+    }));
+
+    row.appendChild(ctl);
+    return row;
+  }
+
+  /** Добавление своего прокси. Пароль хранится в настройках лаунчера как есть. */
+  async function openProxyDialog() {
+    const body = el('<div class="stack"></div>');
+    body.appendChild(el('<div class="hint">Нужен именно SOCKS5. HTTP-прокси не подойдёт: Minecraft ' +
+      'ходит своим протоколом поверх TCP, а HTTP-прокси такой трафик не пропускает.</div>'));
+    body.appendChild(el('<div class="field"><label>Название</label>' +
+      '<input class="input" data-role="label" placeholder="Например: свой VPS"></div>'));
+
+    const hostRow = el('<div class="row-2"></div>');
+    hostRow.appendChild(el('<div class="field"><label>Адрес</label>' +
+      '<input class="input" data-role="host" placeholder="proxy.example.com"></div>'));
+    hostRow.appendChild(el('<div class="field"><label>Порт</label>' +
+      '<input class="input" data-role="port" value="1080"></div>'));
+    body.appendChild(hostRow);
+
+    body.appendChild(el('<div class="field"><label>Логин, если требуется</label>' +
+      '<input class="input" data-role="user"></div>'));
+    body.appendChild(el('<div class="field"><label>Пароль, если требуется</label>' +
+      '<input class="input" type="password" data-role="pass"></div>'));
+    body.appendChild(el('<span class="hint">Прокси — чужая машина: через неё видно, к каким серверам ' +
+      'вы подключаетесь. Для игры это приемлемо, для банка и почты — нет.</span>'));
+
+    const choice = await modal({
+      title: 'Новый прокси',
+      subtitle: 'SOCKS5-сервер для подключения к серверам Minecraft',
+      body,
+      buttons: [
+        { label: 'Отмена', value: null },
+        { label: 'Добавить', kind: 'primary', value: 'add' },
+      ],
+    });
+    if (choice !== 'add') return;
+
+    const value = (role) => body.querySelector('[data-role="' + role + '"]').value.trim();
+    await guard('Не удалось добавить прокси', async () => {
+      const added = await window.api.proxy.add({
+        label: value('label'),
+        host: value('host'),
+        port: value('port'),
+        username: value('user'),
+        password: body.querySelector('[data-role="pass"]').value,
+      });
+      await loadProxies();
+      render();
+      toastOk('Прокси добавлен', added.label);
+    });
+  }
+
+  /**
+   * Крупная плашка состояния — общая для разделов VPN и смены IP:
+   * защищено соединение или нет и какой сейчас внешний адрес.
+   */
+  function netHero({ on, onLabel, offLabel, subtitle, action, viaIp }) {
+    const hero = el(
+      '<div class="net-hero' + (on ? ' on' : '') + '">' +
+        '<div class="net-ring">' + (on ? I.shield : I.globe) + '</div>' +
+        '<div class="net-hero-main">' +
+          '<b>' + esc(on ? onLabel : offLabel) + '</b>' +
+          '<span>' + subtitle + '</span>' +
+          '<div class="net-ip" data-role="ip"></div>' +
+        '</div>' +
+        '<div class="net-hero-act" data-role="act"></div>' +
+      '</div>'
+    );
+
+    const ipHost = hero.querySelector('[data-role="ip"]');
+    if (state.myIp) {
+      // При смене IP свой адрес остаётся прежним — меняется только тот, что видит сервер,
+      // поэтому показываем оба, иначе непонятно, сработало ли вообще
+      ipHost.innerHTML = 'Ваш адрес: <span class="mono">' + esc(state.myIp.ip) + '</span>' +
+        (state.myIp.country ? ' · ' + esc(state.myIp.country) : '') +
+        (viaIp
+          ? ' <span class="net-arrow">→</span> сервер увидит <span class="mono">' + esc(viaIp.ip) + '</span>' +
+            (viaIp.country ? ' · ' + esc(viaIp.country) : '')
+          : '');
+    } else if (state.myIpError) {
+      ipHost.textContent = 'Внешний адрес определить не удалось: ' + state.myIpError;
+    } else {
+      ipHost.textContent = 'Определяем внешний адрес…';
+      loadMyIp().then(() => {
+        if (state.view === 'ip' || state.view === 'vpn') render();
+      });
+    }
+
+    if (action) hero.querySelector('[data-role="act"]').appendChild(action);
+    return hero;
+  }
+
+  /** Адрес, который увидит сервер: берётся из последней проверки включённого прокси. */
+  function activeProxyIp(st) {
+    if (!st.connected || !st.proxy) return null;
+    const check = state.proxyChecks[st.proxy.id] ||
+      (state.proxies || []).map((p) => (p.id === st.proxy.id ? p.lastCheck : null)).find(Boolean);
+    return check && check.ip ? check : null;
+  }
+
+  async function loadMyIp() {
+    try {
+      state.myIp = await window.api.proxy.ip();
+      state.myIpError = null;
+    } catch (e) {
+      state.myIp = null;
+      state.myIpError = e.message;
+    }
+  }
+
+  async function loadProxies() {
+    try {
+      state.proxies = await window.api.proxy.list();
+      state.proxyStatus = await window.api.proxy.status();
+    } catch {
+      state.proxies = [];
+      state.proxyStatus = { connected: false };
+    }
   }
 
   async function loadVpnCountries() {
@@ -3795,7 +4524,12 @@
     $('#win-close').addEventListener('click', () => window.api.app.close());
 
     for (const item of document.querySelectorAll('.nav-item')) {
-      item.addEventListener('click', () => go(item.dataset.view));
+      item.addEventListener('click', () => {
+        // Каталог из бокового меню всегда открывается на модах: то, что смотрели
+        // в прошлый раз, не должно подменять выбранный раздел
+        if (item.dataset.view === 'mods') setModsType('mod');
+        go(item.dataset.view);
+      });
     }
     $('#account-card').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3893,6 +4627,7 @@
     state.friends = await window.api.friends.status().catch(() => null);
     state.themeStatus = await window.api.themes.status().catch(() => null);
     state.vpn = await window.api.vpn.status().catch(() => null);
+    state.proxyStatus = await window.api.proxy.status().catch(() => ({ connected: false }));
 
     await Promise.all([loadInstances(), loadAccounts()]);
     render();

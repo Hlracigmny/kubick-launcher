@@ -45,6 +45,13 @@ contextBridge.exposeInMainWorld('api', {
     repair: (id) => call('instances:repair', { id }),
     openFolder: (id, sub) => call('instances:openFolder', { id, sub }),
   },
+  io: {
+    inspect: (id) => call('io:inspect', { id }),
+    export: (id, parts, includeSettings) => call('io:export', { id, parts, includeSettings }),
+    pick: () => call('io:pick'),
+    import: (file, name) => call('io:import', { file, name }),
+    reveal: (file) => call('io:reveal', { file }),
+  },
   game: {
     launch: (id, server) => call('game:launch', { id, server }),
     stop: (id) => call('game:stop', { id }),
@@ -71,6 +78,17 @@ contextBridge.exposeInMainWorld('api', {
     installed: (instanceId) => call('mods:installed', { instanceId }),
     toggle: (filePath, enabled) => call('mods:toggle', { filePath, enabled }),
     remove: (filePath) => call('mods:remove', { filePath }),
+    categories: (projectType) => call('mods:categories', { projectType }),
+  },
+  proxy: {
+    list: () => call('proxy:list'),
+    add: (payload) => call('proxy:add', payload),
+    remove: (id) => call('proxy:remove', { id }),
+    check: (id) => call('proxy:check', { id }),
+    ip: () => call('proxy:ip'),
+    status: () => call('proxy:status'),
+    start: (id) => call('proxy:start', { id }),
+    stop: () => call('proxy:stop'),
   },
   servers: {
     list: () => call('servers:list'),

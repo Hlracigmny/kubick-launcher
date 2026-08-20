@@ -2,8 +2,8 @@
 <html lang="ru" data-accent="sand">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self' data:; connect-src 'none'">
+  <!-- CSP снята: это только статический предпросмотр -->
+        
   <title>Kubick Launcher</title>
   <link rel="stylesheet" href="css/app.css">
 </head>
@@ -67,6 +67,7 @@
 
   <div class="toasts" id="toasts"></div>
 
+  <script src="mock-api.js"></script>
   <script src="js/icons.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/app.js"></script>

@@ -1155,6 +1155,8 @@ input[type='range']::-webkit-slider-thumb:hover { box-shadow: 0 0 0 6px var(--ac
 
 .gt-mods .gt-head, .gt-mods .gt-row { grid-template-columns: 42px 30px minmax(180px, 1fr) 130px 100px 88px 34px; min-width: 620px; }
 .gt-packs .gt-head, .gt-packs .gt-row { grid-template-columns: 30px minmax(180px, 1fr) 74px 100px 88px 34px; min-width: 540px; }
+.gt-components .gt-head, .gt-components .gt-row { grid-template-columns: minmax(150px, 1fr) minmax(120px, 1fr) 92px; min-width: 400px; }
+.gt-components .gt-row > span:last-child { display: flex; justify-content: center; color: var(--ok, #9caf88); }
 
 /* --- Журнал --- */
 .log-toolbar {
@@ -1442,3 +1444,165 @@ input[type='range']::-webkit-slider-thumb:hover { box-shadow: 0 0 0 6px var(--ac
 /* Форма добавления сервера в окне сборки */
 .add-server { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .add-server .input { font-size: 12px; padding: 7px 10px; }
+
+/* ===== Фильтры каталога ===== */
+.filter-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: -8px 0 16px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.filter-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--text-dim);
+  margin-right: 2px;
+}
+.filter-label svg { width: 13px; height: 13px; }
+.select.sm { padding: 6px 30px 6px 10px; font-size: 12.5px; }
+
+.filter-chip {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 12px; font-weight: 500;
+  transition: color .13s, border-color .13s, background .13s;
+}
+.filter-chip:hover { color: var(--text); }
+.filter-chip.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Подвал списка: сколько показано и подгрузка следующей страницы */
+.list-foot {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 16px 0 4px;
+}
+.list-foot .muted { font-size: 12px; }
+
+/* Каталог внутри окна сборки: фильтры чуть плотнее */
+.sec .filter-bar { margin: 0 0 12px; padding: 8px 10px; }
+
+/* Нужна ли лицензионная учётная запись */
+.srv-lic {
+  align-self: center;
+  font-size: 10.5px; font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  letter-spacing: .2px;
+}
+.srv-lic.yes { color: #d9a256; border-color: rgba(217,162,86,.34); background: rgba(217,162,86,.11); }
+.srv-lic.no { color: #9caf88; border-color: rgba(156,175,136,.34); background: rgba(156,175,136,.11); }
+
+.srv-lic-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.srv-lic-row svg { width: 17px; height: 17px; flex: 0 0 17px; margin-top: 1px; }
+.srv-lic-row.yes svg { color: #d9a256; }
+.srv-lic-row.no svg { color: #9caf88; }
+.srv-lic-row b { display: block; font-size: 13px; font-weight: 620; }
+.srv-lic-row span { display: block; font-size: 11.5px; color: var(--text-dim); line-height: 1.5; margin-top: 2px; }
+
+/* ===== Перенос сборок файлом ===== */
+.io-parts {
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  padding: 6px;
+}
+.io-part {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .13s;
+}
+.io-part:hover { background: var(--surface-3); }
+.io-part.empty { opacity: .45; cursor: default; }
+.io-part.empty:hover { background: none; }
+.io-part input { accent-color: var(--accent); width: 15px; height: 15px; flex: 0 0 15px; }
+.io-part-name { flex: 1; min-width: 0; font-weight: 500; }
+.io-part-size { font-size: 11.5px; color: var(--text-mute); flex-shrink: 0; }
+
+/* ===== Состояние сети: VPN и смена IP ===== */
+.net-hero {
+  display: flex; align-items: center; gap: 16px;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg, 14px);
+  background: var(--surface-2);
+  position: relative;
+  overflow: hidden;
+}
+.net-hero::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(560px 120px at 0% 50%, rgba(156,175,136,.10), transparent 70%);
+  opacity: 0;
+  transition: opacity .25s;
+  pointer-events: none;
+}
+.net-hero.on::after { opacity: 1; }
+.net-hero.on { border-color: rgba(156,175,136,.38); }
+
+.net-ring {
+  display: grid; place-items: center;
+  width: 54px; height: 54px; flex: 0 0 54px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong, var(--line));
+  color: var(--text-mute);
+  background: var(--surface-3);
+}
+.net-ring svg { width: 24px; height: 24px; }
+.net-hero.on .net-ring {
+  border-color: rgba(156,175,136,.55);
+  color: #9caf88;
+  box-shadow: 0 0 0 5px rgba(156,175,136,.10);
+}
+
+.net-hero-main { flex: 1; min-width: 0; }
+.net-hero-main > b { display: block; font-size: 16px; font-weight: 640; letter-spacing: -.2px; }
+.net-hero-main > span { display: block; font-size: 12.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; }
+.net-ip { font-size: 12px; color: var(--text-mute); margin-top: 7px; }
+.net-ip .mono { color: var(--text); }
+
+.net-hero-act { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+
+/* Список прокси */
+.proxy-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  transition: border-color .15s;
+}
+.proxy-row:hover { border-color: var(--line-strong, var(--line)); }
+.proxy-row.active { border-color: rgba(156,175,136,.45); background: rgba(156,175,136,.07); }
+.proxy-row b { font-size: 13.5px; font-weight: 600; }
+
+.proxy-dot {
+  width: 9px; height: 9px; flex: 0 0 9px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong, var(--line));
+}
+.proxy-dot.ok { background: #9caf88; border-color: #9caf88; }
+.proxy-dot.bad { background: #c0685a; border-color: #c0685a; }
+
+/* Две колонки в форме — адрес и порт рядом */
+.row-2 { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
+.net-arrow { color: var(--text-mute); padding: 0 2px; }

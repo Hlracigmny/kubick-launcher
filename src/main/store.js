@@ -51,6 +51,7 @@ const DEFAULT_SETTINGS = {
   windowBounds: null,        // запомненный размер окна
   friendCode: '',           // постоянный код для друзей
   autoAddFriendServers: true,
+  proxies: [],              // свои SOCKS5-прокси для смены IP
 };
 
 class Store {
