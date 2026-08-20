@@ -37,6 +37,7 @@
     myIp: null,
     myIpError: null,
     proxies: null,
+    proxyPresets: null,
     proxyStatus: null,
     proxyChecks: {},
     servers: null,
@@ -383,12 +384,35 @@
     const nameField = el('<div class="field"><label>Название новой сборки</label>' +
       '<input class="input" value="' + esc(info.name) + '"></div>');
     body.appendChild(nameField);
-    body.appendChild(el('<span class="hint">Minecraft ' + esc(info.mcVersion) +
-      ' и загрузчик скачаются заново — сборка появится рядом с остальными, ничего не перезапишется.</span>'));
 
+    if (info.format === 'kubick') {
+      body.appendChild(el('<span class="hint">Minecraft ' + esc(info.mcVersion) +
+        ' и загрузчик скачаются заново — сборка появится рядом с остальными, ничего не перезапишется.</span>'));
+    } else {
+      // У модпака внутри только список модов, а не сами моды: их надо докачать
+      body.appendChild(el('<span class="hint">Это готовая сборка игроков. Внутри — список модов, ' +
+        'а не сами файлы: Minecraft, загрузчик и все моды скачаются по списку. ' +
+        'Займёт заметно дольше, чем перенос своей сборки.</span>'));
+    }
+
+    if (info.needsCurseforgeKey && !state.settings.curseforgeKey) {
+      // Ссылки на файлы CurseForge отдаёт только по ключу — без него моды не приедут
+      const warn = el('<div class="net-note err">Это сборка CurseForge, а ключ API не указан. ' +
+        'Без него ссылки на моды получить нельзя, и установка прервётся.</div>');
+      body.appendChild(warn);
+      const keyRow = el('<div class="row-ctl" style="margin-top:8px"></div>');
+      keyRow.appendChild(button('Указать ключ', I.settings, 'sm', () => {
+        window.UI.closeModal();
+        state.settingsPage = 'integrations';
+        go('settings');
+      }));
+      body.appendChild(keyRow);
+    }
+
+    const FORMAT_LABEL = { kubick: 'Сборка Kubick', mrpack: 'Сборка Modrinth (.mrpack)', curseforge: 'Сборка CurseForge' };
     const choice = await modal({
       title: 'Импорт сборки',
-      subtitle: info.name,
+      subtitle: info.name + ' · ' + (FORMAT_LABEL[info.format] || 'неизвестный формат'),
       body,
       buttons: [
         { label: 'Отмена', value: null },
@@ -3491,6 +3515,7 @@
    * логотип, онлайн и задержка приходят живым опросом самих серверов.
    */
   function renderServers(body, actions) {
+    actions.appendChild(button('Добавить сервер', I.plus, 'primary sm', openAddServer));
     actions.appendChild(button('Обновить', I.refresh, 'ghost sm', async () => {
       setStatus('Опрашиваем серверы…', null, 'busy');
       await guard('Не удалось опросить серверы', async () => {
@@ -3521,6 +3546,56 @@
     body.appendChild(grid);
   }
 
+  /** Свой сервер: адрес, название и отметка про лицензию — её игрок ставит сам. */
+  async function openAddServer() {
+    const body = el('<div class="stack"></div>');
+    body.appendChild(el('<div class="hint">Сервер появится рядом с подборкой, ' +
+      'и лаунчер будет опрашивать его так же: онлайн, задержка, версия.</div>'));
+
+    body.appendChild(el('<div class="field"><label>Адрес</label>' +
+      '<input class="input" data-role="address" placeholder="play.example.com или play.example.com:25566">' +
+      '<span class="hint">Порт указывать не нужно, если он обычный (25565)</span></div>'));
+    body.appendChild(el('<div class="field"><label>Название</label>' +
+      '<input class="input" data-role="name" placeholder="Как подписать в списке"></div>'));
+    body.appendChild(el('<div class="field"><label>Сайт, необязательно</label>' +
+      '<input class="input" data-role="site" placeholder="https://example.com"></div>'));
+
+    const licField = el('<div class="field"><label>Нужна лицензия Minecraft?</label></div>');
+    const licSel = el('<select class="select">' +
+      '<option value="unknown">Не знаю</option>' +
+      '<option value="no">Нет, пускает с офлайн-профилем</option>' +
+      '<option value="yes">Да, только лицензия</option>' +
+      '</select>');
+    licField.appendChild(licSel);
+    licField.appendChild(el('<span class="hint">По протоколу опроса это не определяется — ' +
+      'отметка нужна, чтобы потом не гадать</span>'));
+    body.appendChild(licField);
+
+    const choice = await modal({
+      title: 'Свой сервер',
+      subtitle: 'Добавится к списку и будет опрашиваться вместе с остальными',
+      body,
+      buttons: [
+        { label: 'Отмена', value: null },
+        { label: 'Добавить', kind: 'primary', value: 'add' },
+      ],
+    });
+    if (choice !== 'add') return;
+
+    const value = (role) => body.querySelector('[data-role="' + role + '"]').value.trim();
+    await guard('Не удалось добавить сервер', async () => {
+      const added = await window.api.servers.add({
+        address: value('address'),
+        name: value('name'),
+        site: value('site'),
+        licensed: licSel.value === 'yes' ? true : licSel.value === 'no' ? false : null,
+      });
+      state.servers = null;   // список изменился — опросим заново
+      render();
+      toastOk('Сервер добавлен', added.name);
+    });
+  }
+
   function serverCard(server) {
     const card = el(
       '<button class="srv-card' + (server.online ? '' : ' offline') + '" data-id="' + esc(server.id) + '">' +
@@ -3528,7 +3603,8 @@
           (server.icon ? '<img src="' + esc(server.icon) + '" alt="">'
                        : esc(server.name.slice(0, 2).toUpperCase())) +
         '</div>' +
-        '<div class="srv-name">' + esc(server.name) + '</div>' +
+        '<div class="srv-name">' + esc(server.name) +
+          (server.own ? ' <i class="srv-own">свой</i>' : '') + '</div>' +
         '<div class="srv-addr">' + esc(server.address) + '</div>' +
         licenseChip(server.licensed) +
         '<div class="srv-foot">' +
@@ -3632,11 +3708,22 @@
       body,
       buttons: [
         { label: 'Закрыть', value: null },
+        ...(server.own ? [{ label: 'Убрать из списка', value: 'remove' }] : []),
         { label: 'Скопировать адрес', value: 'copy' },
-        { label: 'Сайт', value: 'site' },
+        ...(server.site ? [{ label: 'Сайт', value: 'site' }] : []),
         { label: 'Подключиться', kind: 'primary', value: 'play' },
       ],
     });
+
+    if (choice === 'remove') {
+      await guard('Не удалось убрать сервер', async () => {
+        await window.api.servers.remove(server.id);
+        state.servers = null;
+        render();
+        toastOk('Сервер убран', server.name);
+      });
+      return;
+    }
 
     if (choice === 'copy') {
       try {
@@ -3729,7 +3816,7 @@
     if (!st.connected && !st.openvpn) {
       const row = el(
         '<div class="net-note" style="margin-bottom:12px">' +
-        '<b style="color:var(--text)">OpenVPN не установлен.</b> Системный VPN меняет маршруты ' +
+        '<b style="color:var(--text)">Клиент OpenVPN не найден.</b> Системный VPN меняет маршруты ' +
         'всей машины, поэтому его поднимает отдельный клиент с правами администратора. ' +
         'Без него лаунчер может только сохранить файл настройки. ' +
         'Если нужен адрес только для игры и без установки — воспользуйтесь разделом «Смена IP».' +
@@ -3741,12 +3828,22 @@
       actions2.appendChild(button('Открыть «Смена IP»', I.globe, 'sm', () => go('ip')));
       body.appendChild(row);
       body.appendChild(actions2);
+    } else if (!st.connected && st.source === 'bundled') {
+      // Своя копия избавляет от установки OpenVPN, но не от прав администратора:
+      // драйвер адаптера ставится в систему, и обещать обратное нельзя
+      body.appendChild(el(
+        '<div class="net-note" style="margin-bottom:12px">' +
+        '<b style="color:var(--text)">OpenVPN идёт в комплекте</b> — ставить его отдельно не нужно. ' +
+        'При первом подключении Windows один раз запросит права администратора для драйвера адаптера.' +
+        '</div>'
+      ));
     }
 
     body.appendChild(el(
-      '<div class="net-note" style="margin-bottom:16px">Трафик пойдёт через сервер добровольца, ' +
-      'который видит адреса ваших подключений. Для игры и обхода блокировок это нормально, ' +
-      'для банка и почты пользоваться таким VPN не стоит.</div>'
+      '<div class="hint" style="margin-bottom:16px">Серверы — открытый проект ' +
+      '<a href="#" data-ext="https://www.vpngate.net">VPN Gate</a> университета Цукубы, ' +
+      'подключение выполняет <a href="#" data-ext="https://openvpn.net">OpenVPN</a>. ' +
+      'Серверы держат добровольцы — для игры подходит, для банка используйте обычное соединение.</div>'
     ));
 
     /* --- Страны --- */
@@ -3887,10 +3984,8 @@
     }));
 
     body.appendChild(el(
-      '<div class="net-note" style="margin-bottom:16px">Меняется адрес только тех подключений, ' +
-      'которые начинает лаунчер: кнопка «Подключиться» в разделе «Серверы» и запуск сразу на сервере. ' +
-      'Сервер, вписанный руками внутри игры, пойдёт напрямую. Системный трафик и другие программы ' +
-      'это не затрагивает.</div>'
+      '<div class="hint" style="margin-bottom:16px">Адрес меняется у подключений, которые запускает ' +
+      'лаунчер: кнопка «Подключиться» и запуск сразу на сервере. Вписанное руками внутри игры идёт напрямую.</div>'
     ));
 
     /* --- Список прокси --- */
@@ -3922,6 +4017,66 @@
       host.appendChild(list);
     }
     body.appendChild(panel);
+    body.appendChild(presetsPanel());
+  }
+
+  /**
+   * Быстрое добавление известных локальных клиентов. Это не чужие серверы,
+   * а порты программ, которые могут уже работать на этой машине.
+   */
+  function presetsPanel() {
+    const panel = el(
+      '<div class="panel"><h2>Готовые варианты</h2>' +
+      '<p class="panel-sub">Порты популярных клиентов, которые поднимают SOCKS5 у вас на компьютере. ' +
+      'Добавьте и нажмите «Проверить» — так видно, запущен ли клиент.</p>' +
+      '<div data-role="list"></div></div>'
+    );
+    const host = panel.querySelector('[data-role="list"]');
+
+    if (!state.proxyPresets) {
+      host.appendChild(el('<div class="skeleton" style="height:60px"></div>'));
+      window.api.proxy.presets().then((list) => {
+        state.proxyPresets = list || [];
+        if (state.view === 'ip') render();
+      }).catch(() => { state.proxyPresets = []; });
+      return panel;
+    }
+
+    const list = el('<div class="stack" style="gap:8px"></div>');
+    for (const preset of state.proxyPresets) {
+      const row = el(
+        '<div class="file-row">' +
+          '<div class="fname"><b>' + esc(preset.label) + '</b>' +
+            '<div class="muted" style="font-size:11.5px">' + esc(preset.host + ':' + preset.port) +
+            ' · ' + esc(preset.note) + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+      const ctl = el('<div class="row-ctl"></div>');
+      if (preset.added) {
+        ctl.appendChild(el('<span class="chip">уже в списке</span>'));
+      } else {
+        ctl.appendChild(button('Добавить', I.plus, 'sm', async () => {
+          await guard('Не удалось добавить', async () => {
+            await window.api.proxy.add({ label: preset.label, host: preset.host, port: preset.port });
+            state.proxyPresets = null;
+            await loadProxies();
+            render();
+            toastOk('Добавлен ' + preset.label, 'Нажмите «Проверить», чтобы узнать, работает ли он');
+          });
+        }));
+      }
+      row.appendChild(ctl);
+      list.appendChild(row);
+    }
+    host.appendChild(list);
+
+    panel.appendChild(el('<div class="hint" style="margin-top:10px">Это порты локальных клиентов: ' +
+      '<a href="#" data-ext="https://www.torproject.org">Tor</a>, ' +
+      '<a href="#" data-ext="https://shadowsocks.org">Shadowsocks</a>, ' +
+      '<a href="#" data-ext="https://github.com/2dust/v2rayN">v2rayN</a>. ' +
+      'Свой адрес добавляется кнопкой вверху.</div>'));
+    return panel;
   }
 
   function proxyRow(proxy, st) {
@@ -3985,6 +4140,7 @@
       await guard('Не удалось удалить', async () => {
         await window.api.proxy.remove(proxy.id);
         delete state.proxyChecks[proxy.id];
+        state.proxyPresets = null;
         await loadProxies();
         render();
       });
@@ -4013,8 +4169,7 @@
       '<input class="input" data-role="user"></div>'));
     body.appendChild(el('<div class="field"><label>Пароль, если требуется</label>' +
       '<input class="input" type="password" data-role="pass"></div>'));
-    body.appendChild(el('<span class="hint">Прокси — чужая машина: через неё видно, к каким серверам ' +
-      'вы подключаетесь. Для игры это приемлемо, для банка и почты — нет.</span>'));
+
 
     const choice = await modal({
       title: 'Новый прокси',
@@ -5049,6 +5204,143 @@
     }
   }
 
+  /* ========================= Панель загрузки ======================== */
+
+  /**
+   * Отдельная плашка про то, что качается прямо сейчас.
+   *
+   * Строка состояния внизу для этого не годилась: она узкая, показывает одну
+   * строку и прячется за окном сборки — а скачивание версии как раз оттуда
+   * и запускают. Плашка живёт поверх всего, показывает этап, проценты, объём
+   * и скорость, и её можно свернуть, если мешает.
+   */
+  const PROGRESS_STAGES = {
+    version: 'Описание версии',
+    jar: 'Файл игры',
+    libraries: 'Библиотеки',
+    natives: 'Нативные библиотеки',
+    assets: 'Ресурсы игры',
+    java: 'Java',
+    loader: 'Загрузчик',
+    modpack: 'Готовая сборка',
+    import: 'Импорт сборки',
+    done: 'Готово',
+  };
+
+  const progress = {
+    active: false,
+    stage: null,
+    label: '',
+    done: 0,
+    total: 0,
+    bytes: 0,
+    totalBytes: 0,
+    startedAt: 0,
+    // Скорость считаем по последнему замеру, а не по всей загрузке:
+    // иначе она долго «помнит» медленный старт и врёт про остаток
+    lastBytes: 0,
+    lastAt: 0,
+    speed: 0,
+    collapsed: false,
+    hideTimer: null,
+  };
+
+  function progressHost() {
+    let host = $('#progress-panel');
+    if (!host) {
+      host = el('<div class="progress-panel" id="progress-panel"></div>');
+      document.body.appendChild(host);
+    }
+    return host;
+  }
+
+  /** Принимает событие прогресса и обновляет плашку. */
+  function pushProgress(p) {
+    const percent = percentOf(p);
+    clearTimeout(progress.hideTimer);
+
+    if (!progress.active) {
+      progress.active = true;
+      progress.startedAt = Date.now();
+      progress.lastAt = Date.now();
+      progress.lastBytes = 0;
+      progress.speed = 0;
+    }
+
+    progress.stage = p.stage || progress.stage;
+    progress.label = p.label || progress.label;
+    progress.done = p.done || 0;
+    progress.total = p.total || 0;
+
+    if (typeof p.bytes === 'number') {
+      const now = Date.now();
+      const elapsed = (now - progress.lastAt) / 1000;
+      // Замеры чаще раза в секунду дают шумную, дёрганую цифру
+      if (elapsed >= 1 && p.bytes > progress.lastBytes) {
+        progress.speed = (p.bytes - progress.lastBytes) / elapsed;
+        progress.lastBytes = p.bytes;
+        progress.lastAt = now;
+      }
+      progress.bytes = p.bytes;
+      progress.totalBytes = p.totalBytes || progress.totalBytes;
+    }
+
+    paintProgress(percent);
+
+    // Этап «готово» гасим сам: отдельного события об окончании нет
+    if (p.stage === 'done' || (percent === 100 && p.stage !== 'assets' && p.stage !== 'libraries')) {
+      progress.hideTimer = setTimeout(finishProgress, 1400);
+    }
+  }
+
+  function finishProgress() {
+    clearTimeout(progress.hideTimer);
+    progress.active = false;
+    progress.bytes = 0;
+    progress.totalBytes = 0;
+    progress.speed = 0;
+    const host = $('#progress-panel');
+    if (host) {
+      host.classList.remove('shown');
+      setTimeout(() => { if (!progress.active && host.parentNode) host.remove(); }, 260);
+    }
+  }
+
+  function paintProgress(percent) {
+    const host = progressHost();
+    const stageName = PROGRESS_STAGES[progress.stage] || 'Подготовка';
+    const pct = percent == null ? null : Math.max(0, Math.min(100, percent));
+
+    const parts = [];
+    if (progress.total > 1) parts.push(formatCount(progress.done) + ' из ' + formatCount(progress.total));
+    if (progress.totalBytes > 0) parts.push(formatSize(progress.bytes) + ' / ' + formatSize(progress.totalBytes));
+    if (progress.speed > 0) parts.push(formatSize(progress.speed) + '/с');
+
+    host.innerHTML =
+      '<div class="pp-head">' +
+        '<span class="pp-spinner"></span>' +
+        '<b class="pp-stage">' + esc(stageName) + '</b>' +
+        (pct != null ? '<span class="pp-percent">' + pct + '%</span>' : '') +
+        '<button class="pp-toggle" title="' + (progress.collapsed ? 'Развернуть' : 'Свернуть') + '">' +
+          (progress.collapsed ? I.chevronUp : I.minus) + '</button>' +
+      '</div>' +
+      '<div class="pp-body">' +
+        '<div class="pp-label">' + esc(progress.label || 'Работаем…') + '</div>' +
+        '<div class="pp-bar' + (pct == null ? ' indeterminate' : '') + '">' +
+          '<i style="width:' + (pct == null ? 100 : pct) + '%"></i></div>' +
+        (parts.length ? '<div class="pp-meta">' + esc(parts.join(' · ')) + '</div>' : '') +
+      '</div>';
+
+    host.classList.toggle('collapsed', progress.collapsed);
+    host.querySelector('.pp-toggle').addEventListener('click', () => {
+      progress.collapsed = !progress.collapsed;
+      paintProgress(percent);
+    });
+
+    // Класс добавляем следующим кадром, чтобы сработало появление
+    requestAnimationFrame(() => host.classList.add('shown'));
+  }
+
   /* ============================== Старт ============================= */
 
   function wireEvents() {
@@ -5056,6 +5348,7 @@
       const percent = percentOf(p);
       const label = p.label || 'Работаем…';
       setStatus(label + (percent != null ? ' — ' + percent + '%' : ''), percent, 'busy');
+      pushProgress(p);
 
       // Прогресс на карточке запускаемой сборки
       if (p.instanceId) {
@@ -5145,6 +5438,14 @@
   }
 
   function wireChrome() {
+    // Ссылки на сайты разработчиков открываются в системном браузере
+    document.addEventListener('click', (e) => {
+      const link = e.target.closest('[data-ext]');
+      if (!link) return;
+      e.preventDefault();
+      window.api.app.openExternal(link.dataset.ext);
+    });
+
     $('#win-min').addEventListener('click', () => window.api.app.minimize());
     $('#win-max').addEventListener('click', () => window.api.app.maximize());
     $('#win-close').addEventListener('click', () => window.api.app.close());

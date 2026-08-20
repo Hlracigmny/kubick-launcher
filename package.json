@@ -1,6 +1,6 @@
 {
   "name": "kubick-launcher",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Современный лаунчер Minecraft: Vanilla, Fabric, Quilt, Forge, NeoForge + каталог модов Modrinth/CurseForge",
   "main": "src/main/index.js",
   "repository": "https://github.com/Hlracigmny/kubick-launcher",
@@ -96,7 +96,16 @@
       "target": [
         "dmg"
       ]
-    }
+    },
+    "extraResources": [
+      {
+        "from": "resources/openvpn",
+        "to": "openvpn",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   },
   "engines": {
     "node": ">=20.18.0"

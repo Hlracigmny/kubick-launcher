@@ -285,6 +285,16 @@ handle('instances:openFolder', async ({ id, sub }) => {
 
 const KUBICK_FILTER = [{ name: 'Сборка Kubick', extensions: ['kubick'] }];
 
+// При импорте принимаем и свой формат, и готовые сборки в архивах:
+// .mrpack от Modrinth и zip от CurseForge — их игроки скачивают чаще всего
+const IMPORT_FILTER = [
+  { name: 'Сборки', extensions: ['kubick', 'mrpack', 'zip'] },
+  { name: 'Сборка Kubick', extensions: ['kubick'] },
+  { name: 'Сборка Modrinth', extensions: ['mrpack'] },
+  { name: 'Сборка CurseForge', extensions: ['zip'] },
+  { name: 'Все файлы', extensions: ['*'] },
+];
+
 handle('io:inspect', async ({ id }) => instanceIO.inspect(id));
 
 handle('io:export', async ({ id, parts, includeSettings }) => {
@@ -304,7 +314,7 @@ handle('io:pick', async () => {
   const result = await dialog.showOpenDialog(win, {
     title: 'Выберите файл сборки',
     properties: ['openFile'],
-    filters: KUBICK_FILTER,
+    filters: IMPORT_FILTER,
   });
   if (result.canceled || !result.filePaths.length) return null;
   const file = result.filePaths[0];
@@ -312,7 +322,9 @@ handle('io:pick', async () => {
 });
 
 handle('io:import', async ({ file, name }) =>
-  instanceIO.importInstance({ file, name }, (p) => send('task:progress', { scope: 'import', ...p })));
+  instanceIO.importInstance({ file, name },
+    (p) => send('task:progress', { scope: 'import', ...p }),
+    store.settings));
 
 handle('io:reveal', async ({ file }) => { shell.showItemInFolder(file); return true; });
 
@@ -503,6 +515,7 @@ handle('mods:remove', async ({ filePath }) => { mods.remove(filePath); return tr
 /* ---------------------------- Смена IP ----------------------------- */
 
 handle('proxy:list', async () => proxy.list());
+handle('proxy:presets', async () => proxy.presets());
 handle('proxy:add', async (payload) => proxy.add(payload));
 handle('proxy:remove', async ({ id }) => proxy.remove(id));
 handle('proxy:check', async ({ id }) => proxy.check(id));
@@ -512,6 +525,8 @@ handle('proxy:start', async ({ id }) => proxy.start(id));
 handle('proxy:stop', async () => { proxy.stop(); return proxy.status(); });
 
 handle('servers:list', async () => serverList.list());
+handle('servers:add', async (payload) => serverList.addOwn(payload));
+handle('servers:remove', async ({ id }) => serverList.removeOwn(id));
 handle('servers:status', async ({ force } = {}) => serverList.statuses({ force: Boolean(force) }));
 handle('servers:ping', async ({ address }) => serverList.pingOne(address));
 

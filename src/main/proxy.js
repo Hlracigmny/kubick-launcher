@@ -32,6 +32,56 @@ const IP_SERVICES = [
   { url: 'https://api.ipify.org?format=json', pick: (d) => (d && d.ip ? { ip: d.ip } : null) },
 ];
 
+/**
+ * Готовые пресеты — это адреса **локальных** клиентов, которые уже могут стоять
+ * у игрока: Tor, Shadowsocks, Xray. Каждый из них поднимает SOCKS5 на 127.0.0.1
+ * по своему порту, и достаточно нажать «Проверить», чтобы узнать, запущен ли он.
+ *
+ * Чужих публичных прокси здесь намеренно нет. Прокси видит, к какому серверу вы
+ * подключаетесь, и списки бесплатных прокси наполняются кем попало и меняются
+ * каждый час: вписать туда конкретные адреса значило бы либо выдумать их,
+ * либо пожелать удачи. Свой адрес добавляется кнопкой рядом.
+ */
+const PRESETS = [
+  {
+    id: 'tor',
+    label: 'Tor',
+    host: '127.0.0.1',
+    port: 9050,
+    note: 'Служба Tor. Стандартный порт демона tor',
+  },
+  {
+    id: 'tor-browser',
+    label: 'Tor Browser',
+    host: '127.0.0.1',
+    port: 9150,
+    note: 'Tor Browser поднимает свой SOCKS5 на 9150, пока окно открыто',
+  },
+  {
+    id: 'shadowsocks',
+    label: 'Shadowsocks',
+    host: '127.0.0.1',
+    port: 1080,
+    note: 'Порт по умолчанию у клиентов Shadowsocks',
+  },
+  {
+    id: 'xray',
+    label: 'Xray / V2Ray',
+    host: '127.0.0.1',
+    port: 10808,
+    note: 'Порт по умолчанию у v2rayN и подобных клиентов',
+  },
+];
+
+/** Пресеты для интерфейса: помечаем те, что уже добавлены. */
+function presets() {
+  const existing = all();
+  return PRESETS.map((p) => ({
+    ...p,
+    added: existing.some((x) => x.host === p.host && Number(x.port) === p.port),
+  }));
+}
+
 /* ------------------------------- Хранение ------------------------------- */
 
 function all() {
@@ -400,4 +450,7 @@ async function relayFor(host, port) {
   });
 }
 
-module.exports = { list, add, remove, check, externalIp, status, start, stop, relayFor, socksConnect };
+module.exports = {
+  list, add, remove, check, externalIp, status, start, stop, relayFor, socksConnect,
+  presets, PRESETS,
+};

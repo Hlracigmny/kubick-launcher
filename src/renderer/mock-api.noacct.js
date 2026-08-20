@@ -37,6 +37,7 @@
   const servers = [
     { id: 'hypixel', name: 'Hypixel', address: 'mc.hypixel.net', site: 'https://hypixel.net', region: 'Мир', licensed: true, online: true, latency: 92, players: 41230, maxPlayers: 200000, version: '1.8-1.21', motd: 'Hypixel Network', icon: null, error: null },
     { id: 'funtime', name: 'FunTime', address: 'mc.funtime.su', site: 'https://funtime.su', region: 'Россия', licensed: false, online: true, latency: 41, players: 8120, maxPlayers: 20000, version: '1.16-1.21', motd: 'FunTime', icon: null, error: null },
+    { id: 'own-1', name: 'Сервер друга', address: 'play.friend.local', site: null, region: 'Свой', licensed: false, own: true, online: true, latency: 12, players: 3, maxPlayers: 20, version: '1.21.1', motd: 'Дом', icon: null, error: null },
     { id: 'dead', name: 'Wynncraft', address: 'play.wynncraft.com', site: 'https://wynncraft.com', region: 'Мир', licensed: true, online: false, latency: 0, players: 0, maxPlayers: 0, version: '', motd: '', icon: null, error: 'Нет ответа' },
   ];
 
@@ -85,7 +86,8 @@
       pick: () => delay({
         file: 'C:/tmp/pack.kubick', name: 'Сборка друга', mcVersion: '1.21.1',
         loader: 'fabric', loaderVersion: '0.16.5', exportedAt: Date.now(), size: 219e6,
-        folders: [{ folder: 'mods', files: 96 }, { folder: 'config', files: 41 }],
+        format: 'mrpack', needsCurseforgeKey: false,
+        folders: [{ folder: 'моды из каталога', files: 96 }, { folder: 'файлы настроек', files: 41 }],
       }),
       import: () => delay({ instance: instances[0], files: 137 }),
       reveal: () => delay(true),
@@ -134,7 +136,7 @@
       ]),
       remove: () => delay(true), clear: () => delay(true), open: () => delay(true),
     },
-    servers: { list: () => delay(servers), status: () => delay(servers), ping: () => delay(servers[0]) },
+    servers: { list: () => delay(servers), status: () => delay(servers), ping: () => delay(servers[0]), add: (p) => delay({ ...p, name: p.name || p.address }), remove: () => delay(true) },
     proxy: {
       list: () => delay(proxies),
       add: (p) => { const e = { ...p, id: 'px' + (proxies.length + 1), hasPassword: Boolean(p.password) }; proxies = [...proxies, e]; return delay(e); },
@@ -142,11 +144,16 @@
       check: (id) => delay({ id, ok: true, latency: 74, ip: '185.22.10.7', country: 'Нидерланды', code: 'NL', city: 'Amsterdam' }, 300),
       ip: () => delay({ ip: '203.0.113.45', country: 'Россия', code: 'RU', city: 'Москва' }, 200),
       status: () => delay(proxyState),
+      presets: () => delay([
+        { id: 'tor', label: 'Tor', host: '127.0.0.1', port: 9050, note: 'Служба Tor', added: false },
+        { id: 'tor-browser', label: 'Tor Browser', host: '127.0.0.1', port: 9150, note: 'Пока окно открыто', added: true },
+        { id: 'xray', label: 'Xray / V2Ray', host: '127.0.0.1', port: 10808, note: 'Порт по умолчанию', added: false },
+      ]),
       start: (id) => { proxyState = { connected: true, proxy: proxies.find((p) => p.id === id), relays: 0 }; return delay(proxyState); },
       stop: () => { proxyState = { connected: false, proxy: null, relays: 0 }; return delay(proxyState); },
     },
     vpn: {
-      status: () => delay({ connected: false, server: null, since: null, openvpn: null }),
+      status: () => delay({ connected: false, server: null, since: null, openvpn: 'C:/resources/openvpn/openvpn.exe', source: 'bundled', driver: null }),
       countries: () => delay([
         { code: 'JP', name: 'Japan', count: 210, bestPing: 12, maxSpeed: 88 },
         { code: 'KR', name: 'Korea', count: 96, bestPing: 24, maxSpeed: 54 },

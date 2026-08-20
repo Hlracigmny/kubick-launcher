@@ -131,9 +131,59 @@ const OPENVPN_PATHS = [
   'C:\\Program Files\\OpenVPN Connect\\openvpn.exe',
 ];
 
+const EXE = process.platform === 'win32' ? 'openvpn.exe' : 'openvpn';
+
+/**
+ * Папка со своей копией OpenVPN.
+ *
+ * В собранном приложении она приезжает через extraResources и лежит рядом
+ * с exe, в разработке — в корне репозитория. Файлы туда кладутся отдельно
+ * (tools/fetch-openvpn.js): исполняемые файлы чужого проекта в репозитории
+ * не хранятся.
+ */
+function bundledDir() {
+  const packed = process.resourcesPath ? path.join(process.resourcesPath, 'openvpn') : null;
+  const dev = path.join(__dirname, '..', '..', 'resources', 'openvpn');
+  for (const dir of [packed, dev]) {
+    if (dir && fs.existsSync(path.join(dir, EXE))) return dir;
+  }
+  return null;
+}
+
+/**
+ * Где взять OpenVPN. Своя копия идёт первой: её версия известна, и пользователю
+ * не нужно ничего ставить руками.
+ *
+ * Важно понимать границу. Свой openvpn.exe снимает необходимость устанавливать
+ * OpenVPN, но не снимает главного требования: туннелю нужен виртуальный сетевой
+ * адаптер, а его драйвер ставится с правами администратора. Полностью «без
+ * установки» системный VPN не работает ни у кого — так устроена сама Windows.
+ * Если нужен другой адрес только для игры и без прав администратора,
+ * для этого есть раздел «Смена IP».
+ */
 function findOpenVpn() {
+  const bundled = bundledDir();
+  if (bundled) return path.join(bundled, EXE);
+
   for (const candidate of OPENVPN_PATHS) {
     try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* нет */ }
+  }
+  return null;
+}
+
+/** Откуда взялся найденный OpenVPN — интерфейс объясняет это пользователю. */
+function openVpnSource() {
+  if (bundledDir()) return 'bundled';
+  return findOpenVpn() ? 'system' : null;
+}
+
+/** Есть ли рядом драйвер адаптера, который можно поставить самим. */
+function bundledDriver() {
+  const dir = bundledDir();
+  if (!dir) return null;
+  for (const name of ['tap-windows.exe', 'tap-windows6.msi', 'wintun.dll']) {
+    const file = path.join(dir, name);
+    if (fs.existsSync(file)) return { file, name, kind: name.endsWith('.dll') ? 'wintun' : 'tap' };
   }
   return null;
 }
@@ -162,6 +212,8 @@ function status() {
     server: current ? current.server : null,
     since: current ? current.since : null,
     openvpn: findOpenVpn(),
+    source: openVpnSource(),
+    driver: bundledDriver(),
   };
 }
 
@@ -230,4 +282,7 @@ function disconnect() {
   return true;
 }
 
-module.exports = { countries, serversOf, saveConfig, connect, disconnect, status, findOpenVpn, load };
+module.exports = {
+  countries, serversOf, saveConfig, connect, disconnect, status,
+  findOpenVpn, openVpnSource, bundledDir, bundledDriver, load,
+};

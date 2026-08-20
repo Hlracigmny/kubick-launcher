@@ -53,6 +53,7 @@ const DEFAULT_SETTINGS = {
   autoAddFriendServers: true,
   proxies: [],              // свои SOCKS5-прокси для смены IP
   accountServer: '',        // адрес сервера учётных записей Kubick
+  ownServers: [],           // серверы Minecraft, добавленные вручную
 };
 
 class Store {

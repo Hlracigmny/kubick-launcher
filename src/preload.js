@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   proxy: {
     list: () => call('proxy:list'),
+    presets: () => call('proxy:presets'),
     add: (payload) => call('proxy:add', payload),
     remove: (id) => call('proxy:remove', { id }),
     check: (id) => call('proxy:check', { id }),
@@ -118,6 +119,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => call('servers:list'),
     status: (force) => call('servers:status', { force }),
     ping: (address) => call('servers:ping', { address }),
+    add: (payload) => call('servers:add', payload),
+    remove: (id) => call('servers:remove', { id }),
   },
   inst: {
     mods: (id) => call('inst:mods', { id }),

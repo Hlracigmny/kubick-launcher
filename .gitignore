@@ -13,3 +13,8 @@ CLAUDE.md
 
 # Зависимости сервера учётных записей
 server/node_modules/
+
+# Своя копия OpenVPN: бинарники кладёт владелец проекта, в репозитории их нет
+resources/openvpn/*
+!resources/openvpn/README.md
+resources/.cache/

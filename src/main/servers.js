@@ -1,4 +1,5 @@
 'use strict';
+const crypto = require('crypto');
 const { pingAll } = require('./mcping');
 
 /**
@@ -29,8 +30,61 @@ const CACHE_TTL = 60 * 1000;
 let cache = null;
 let cachedAt = 0;
 
+/* --------------------------- Свои серверы ---------------------------- */
+
+/**
+ * Серверы, добавленные вручную, живут в настройках рядом с подборкой.
+ * Опрашиваются они точно так же, но признак «нужна лицензия» ставит сам игрок:
+ * по протоколу опроса это не определяется.
+ */
+function own() {
+  const { store } = require('./store');
+  return Array.isArray(store.settings.ownServers) ? store.settings.ownServers : [];
+}
+
+function saveOwn(next) {
+  const { store } = require('./store');
+  store.saveSettings({ ownServers: next });
+  cache = null;   // список изменился — прошлый опрос уже неполный
+  return next;
+}
+
+function addOwn({ name, address, site, licensed }) {
+  const cleanAddress = String(address || '').trim();
+  if (!cleanAddress) throw new Error('Укажите адрес сервера');
+  if (cleanAddress.includes(' ')) throw new Error('В адресе не должно быть пробелов');
+
+  const current = own();
+  if (current.some((s) => s.address.toLowerCase() === cleanAddress.toLowerCase())) {
+    throw new Error('Этот сервер уже добавлен');
+  }
+
+  const entry = {
+    id: 'own-' + crypto.randomBytes(4).toString('hex'),
+    name: String(name || '').trim() || cleanAddress,
+    address: cleanAddress,
+    site: String(site || '').trim() || null,
+    region: 'Свой',
+    licensed: licensed === true ? true : licensed === false ? false : null,
+    own: true,
+    addedAt: Date.now(),
+  };
+  saveOwn([...current, entry]);
+  return entry;
+}
+
+function removeOwn(id) {
+  saveOwn(own().filter((s) => s.id !== id));
+  return true;
+}
+
+/** Подборка плюс свои: свои идут первыми — их добавляли осознанно. */
+function all() {
+  return [...own(), ...CATALOG];
+}
+
 function list() {
-  return CATALOG.map((s) => ({ ...s }));
+  return all().map((s) => ({ ...s }));
 }
 
 /**
@@ -40,10 +94,11 @@ function list() {
 async function statuses({ force = false } = {}) {
   if (!force && cache && Date.now() - cachedAt < CACHE_TTL) return cache;
 
-  const results = await pingAll(CATALOG.map((s) => s.address));
+  const catalog = all();
+  const results = await pingAll(catalog.map((s) => s.address));
   const byAddress = new Map(results.map((r) => [r.address, r]));
 
-  cache = CATALOG.map((s) => {
+  cache = catalog.map((s) => {
     const live = byAddress.get(s.address) || { online: false, error: 'Нет ответа' };
     return {
       ...s,
@@ -56,7 +111,11 @@ async function statuses({ force = false } = {}) {
       icon: live.favicon || null,
       error: live.error || null,
     };
-  }).sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players);
+  }).sort((a, b) =>
+    // Свои всегда сверху, дальше живые и по числу игроков
+    Number(Boolean(b.own)) - Number(Boolean(a.own)) ||
+    Number(b.online) - Number(a.online) ||
+    b.players - a.players);
 
   cachedAt = Date.now();
   return cache;
@@ -68,4 +127,4 @@ async function pingOne(address) {
   return result;
 }
 
-module.exports = { list, statuses, pingOne, CATALOG };
+module.exports = { list, statuses, pingOne, own, addOwn, removeOwn, CATALOG };

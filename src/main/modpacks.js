@@ -213,7 +213,53 @@ async function install({ source, version, name }, settings, onProgress) {
     attempts: 3,
   });
 
-  const zip = openPack(packFile);
+  // Дальше файл на диске, и путь одинаков для скачанного и для выбранного вручную
+  return installFromFile({
+    file: packFile, name, source, removeAfter: true,
+    origin: { projectId: version.projectId, versionId: version.id },
+  }, settings, onProgress);
+}
+
+/** Что за пакет лежит в файле: .mrpack от Modrinth или zip от CurseForge. */
+function detectPack(file) {
+  const zip = openPack(file);
+  if (zip.getEntry('modrinth.index.json')) return { zip, source: 'modrinth' };
+  if (zip.getEntry('manifest.json')) return { zip, source: 'curseforge' };
+  throw new Error('Это не модпак: внутри нет ни modrinth.index.json, ни manifest.json');
+}
+
+/** Краткое описание пакета без установки — чтобы показать до того, как ставить. */
+function inspectFile(file) {
+  const { zip, source } = detectPack(file);
+  const info = source === 'modrinth' ? readModrinthIndex(zip) : readCurseForgeManifest(zip);
+  const overrides = zip.getEntries()
+    .filter((e) => !e.isDirectory && /^(overrides|client-overrides)\//.test(e.entryName));
+  return {
+    source,
+    name: info.name,
+    mcVersion: info.mcVersion,
+    loader: info.loader,
+    loaderVersion: info.loaderVersion,
+    packVersion: info.packVersion || null,
+    modCount: source === 'modrinth' ? (info.files || []).length : (info.fileRefs || []).length,
+    overrideFiles: overrides.length,
+    size: (() => { try { return fs.statSync(file).size; } catch { return 0; } })(),
+  };
+}
+
+/**
+ * Ставит модпак из файла на диске. Отдельно от install(), потому что файл может
+ * быть и скачанным из каталога, и выбранным пользователем вручную —
+ * дальше разницы никакой.
+ */
+async function installFromFile({ file, name, source, removeAfter = false, origin = null }, settings, onProgress) {
+  const report = onProgress || (() => {});
+  const opts = settings || {};
+
+  const detected = detectPack(file);
+  const zip = detected.zip;
+  const packFile = file;
+  source = source || detected.source;
   const isModrinth = source === 'modrinth';
   const info = isModrinth ? readModrinthIndex(zip) : readCurseForgeManifest(zip);
 
@@ -263,7 +309,8 @@ async function install({ source, version, name }, settings, onProgress) {
     : [info.overridesDir, 'overrides'];
   const copied = applyOverrides(zip, instanceDir, [...new Set(overrideFolders)]);
 
-  // Запоминаем происхождение — пригодится для обновления сборки в будущем
+  // Запоминаем происхождение — пригодится для обновления сборки в будущем.
+  // У файла, выбранного вручную, происхождения нет: обновлять его неоткуда.
   const { store } = require('./store');
   const current = store.getInstance(instance.id);
   if (current) {
@@ -271,15 +318,17 @@ async function install({ source, version, name }, settings, onProgress) {
       ...current,
       modpack: {
         source,
-        projectId: version.projectId,
-        versionId: version.id,
+        projectId: origin ? origin.projectId : null,
+        versionId: origin ? origin.versionId : null,
         packVersion: info.packVersion || null,
+        fromFile: !origin,
         installedAt: Date.now(),
       },
     });
   }
 
-  fs.rmSync(packFile, { force: true });
+  // Скачанный в кеш пакет убираем, а выбранный пользователем файл — его собственный
+  if (removeAfter) fs.rmSync(packFile, { force: true });
   report({ stage: 'modpack', label: 'Сборка готова', done: 1, total: 1 });
 
   return {
@@ -291,4 +340,7 @@ async function install({ source, version, name }, settings, onProgress) {
   };
 }
 
-module.exports = { install, readModrinthIndex, readCurseForgeManifest };
+module.exports = {
+  install, installFromFile, inspectFile, detectPack,
+  readModrinthIndex, readCurseForgeManifest,
+};

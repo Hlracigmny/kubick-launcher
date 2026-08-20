@@ -5,6 +5,7 @@ const AdmZip = require('adm-zip');
 const P = require('./paths');
 const { store } = require('./store');
 const instances = require('./instances');
+const modpacks = require('./modpacks');
 
 /**
  * Перенос сборок между машинами одним файлом.
@@ -156,8 +157,46 @@ function readManifest(file) {
   return { zip, data };
 }
 
+/**
+ * Определяет, что за файл выбрали. Кроме своего .kubick лаунчер принимает
+ * готовые сборки в архивах: .mrpack от Modrinth и zip от CurseForge —
+ * это то, что игроки чаще всего и скачивают.
+ */
+function detectFormat(file) {
+  let zip;
+  try { zip = new AdmZip(file); } catch { throw new Error('Файл не открывается как архив'); }
+
+  if (zip.getEntry(MANIFEST)) return 'kubick';
+  if (zip.getEntry('modrinth.index.json')) return 'mrpack';
+  if (zip.getEntry('manifest.json')) return 'curseforge';
+
+  throw new Error('Не удалось понять, что это за файл. Подойдёт сборка Kubick (.kubick), ' +
+    'сборка Modrinth (.mrpack) или архив сборки CurseForge (.zip).');
+}
+
 /** Что внутри файла — показывается до установки, чтобы не ставить вслепую. */
 function preview(file) {
+  const format = detectFormat(file);
+  if (format !== 'kubick') {
+    const info = modpacks.inspectFile(file);
+    return {
+      format,
+      name: info.name || 'Готовая сборка',
+      mcVersion: info.mcVersion,
+      loader: info.loader,
+      loaderVersion: info.loaderVersion,
+      packVersion: info.packVersion,
+      exportedAt: null,
+      size: info.size,
+      // У модпака состав другой: моды докачиваются, а не лежат внутри
+      folders: [
+        { folder: 'моды из каталога', files: info.modCount },
+        { folder: 'файлы настроек', files: info.overrideFiles },
+      ].filter((f) => f.files > 0),
+      needsCurseforgeKey: format === 'curseforge',
+    };
+  }
+
   const { zip, data } = readManifest(file);
   const counts = {};
   for (const entry of zip.getEntries()) {
@@ -167,6 +206,7 @@ function preview(file) {
     counts[top] = (counts[top] || 0) + 1;
   }
   return {
+    format: 'kubick',
     name: data.name || 'Сборка',
     mcVersion: data.mcVersion,
     loader: data.loader || 'vanilla',
@@ -192,8 +232,17 @@ function safeJoin(root, relative) {
  * Ставит сборку из файла: создаёт её заново (со скачиванием версии и загрузчика),
  * затем раскладывает содержимое overrides.
  */
-async function importInstance({ file, name }, onProgress) {
+async function importInstance({ file, name }, onProgress, settings) {
   const report = onProgress || (() => {});
+
+  // Готовую сборку из архива ставит modpacks: там уже есть и разбор манифеста,
+  // и докачка модов по ссылкам, и раскладка overrides
+  const format = detectFormat(file);
+  if (format !== 'kubick') {
+    const res = await modpacks.installFromFile({ file, name, removeAfter: false }, settings, report);
+    return { instance: res.instance, files: res.modCount + res.overrideFiles, format };
+  }
+
   const { zip, data } = readManifest(file);
 
   report({ stage: 'import', label: 'Установка ' + (data.loader || 'vanilla') + ' ' + data.mcVersion, done: 0, total: 1 });
@@ -237,4 +286,4 @@ async function importInstance({ file, name }, onProgress) {
   return { instance: store.getInstance(instance.id) || instance, files: done };
 }
 
-module.exports = { inspect, exportInstance, preview, importInstance, suggestedFileName, PARTS };
+module.exports = { inspect, exportInstance, preview, importInstance, detectFormat, suggestedFileName, PARTS };

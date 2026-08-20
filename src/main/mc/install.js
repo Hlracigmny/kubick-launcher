@@ -192,13 +192,19 @@ async function installAssets(version, report, maxDownloads) {
   const objects = Object.entries(data.objects || {});
 
   let done = 0;
-  report({ stage: 'assets', label: 'Ресурсы игры', done: 0, total: objects.length });
+  // Считаем и байты: по числу файлов не понять, сколько ещё ждать —
+  // ресурсы бывают и по 300 байт, и по мегабайту
+  let bytes = 0;
+  const totalBytes = objects.reduce((sum, pair) => sum + (pair[1].size || 0), 0);
+  report({ stage: 'assets', label: 'Ресурсы игры', done: 0, total: objects.length, bytes: 0, totalBytes });
+
   await downloadPool(objects, maxDownloads, async (pair) => {
     const name = pair[0];
     const obj = pair[1];
     const sub = obj.hash.slice(0, 2);
     const dest = path.join(P.assetObjects, sub, obj.hash);
     await downloadFile(RESOURCES + sub + '/' + obj.hash, dest, { sha1: obj.hash, size: obj.size });
+    bytes += obj.size || 0;
 
     // Версии до 1.7 читают ресурсы из обычной папки, а не из хеш-хранилища
     if (data.virtual || data.map_to_resources) {
@@ -213,7 +219,7 @@ async function installAssets(version, report, maxDownloads) {
     }
     done++;
     if (done % 25 === 0 || done === objects.length) {
-      report({ stage: 'assets', label: 'Ресурсы игры', done, total: objects.length });
+      report({ stage: 'assets', label: 'Ресурсы игры', done, total: objects.length, bytes, totalBytes });
     }
   });
 }
@@ -246,7 +252,10 @@ async function installVersion(id, onProgress, settings) {
   const collected = collectLibraries(version);
   const downloads = collected.downloads;
   let libDone = 0;
-  report({ stage: 'libraries', label: 'Библиотеки', done: 0, total: downloads.length });
+  let libBytes = 0;
+  const libTotalBytes = downloads.reduce((sum, d) => sum + (d.size || 0), 0);
+  report({ stage: 'libraries', label: 'Библиотеки', done: 0, total: downloads.length, bytes: 0, totalBytes: libTotalBytes });
+
   await downloadPool(downloads, maxDownloads, async (d) => {
     try {
       await downloadFile(d.url, d.dest, { sha1: d.sha1, size: d.size });
@@ -256,8 +265,9 @@ async function installVersion(id, onProgress, settings) {
       throw e;
     } finally {
       libDone++;
+      libBytes += d.size || 0;
       if (libDone % 5 === 0 || libDone === downloads.length) {
-        report({ stage: 'libraries', label: 'Библиотеки', done: libDone, total: downloads.length });
+        report({ stage: 'libraries', label: 'Библиотеки', done: libDone, total: downloads.length, bytes: libBytes, totalBytes: libTotalBytes });
       }
     }
   });
