@@ -1,0 +1,98 @@
+{
+  "name": "kubick-launcher",
+  "version": "1.3.0",
+  "description": "Современный лаунчер Minecraft: Vanilla, Fabric, Quilt, Forge, NeoForge + каталог модов Modrinth/CurseForge",
+  "main": "src/main/index.js",
+  "repository": "https://github.com/Hlracigmny/kubick-launcher",
+  "author": {
+    "name": "Kubick Launcher"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "icon": "electron tools/make-icon.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis portable",
+    "release": "electron-builder --win nsis portable --publish always"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.kubick.launcher",
+    "productName": "Kubick Launcher",
+    "copyright": "Copyright © 2026 Kubick Launcher",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/__preview.html",
+      "!**/mock-api.js"
+    ],
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Kubick Launcher",
+      "uninstallDisplayName": "Kubick Launcher ${version}",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "language": "1049",
+      "artifactName": "Kubick-Launcher-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Kubick-Launcher-${version}-portable.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Game",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.games",
+      "target": [
+        "dmg"
+      ]
+    }
+  }
+}

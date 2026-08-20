@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ru" data-accent="sand">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self' data:; connect-src 'none'">
+  <title>Kubick Launcher</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="bg" aria-hidden="true">
+    <i class="bg-base"></i>
+    <i class="bg-move"></i>
+    <i class="bg-photo" id="bg-photo"></i>
+    <i class="bg-dim"></i>
+  </div>
+
+  <div id="root">
+
+    <div class="titlebar">
+      <div class="win-ctl">
+        <button class="wc-close" id="win-close" title="Закрыть" data-icon="macClose"></button>
+        <button class="wc-min" id="win-min" title="Свернуть" data-icon="macMin"></button>
+        <button class="wc-zoom" id="win-max" title="Развернуть" data-icon="macZoom"></button>
+      </div>
+    </div>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" data-icon="cube"></div>
+          <div class="brand-text">
+            <b>Kubick Launcher</b>
+            <span>для Minecraft</span>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-item active" data-view="library" data-icon="library">
+            Библиотека<span class="nav-badge" id="badge-library" style="display:none"></span>
+          </button>
+          <button class="nav-item" data-view="mods" data-icon="package">Каталог модов</button>
+          <button class="nav-item" data-view="accounts" data-icon="user">Аккаунты</button>
+          <button class="nav-item" data-view="network" data-icon="network">Игра по сети<span class="nav-badge" id="badge-lan" style="display:none"></span></button>
+          <button class="nav-item" data-view="vpn" data-icon="shield">VPN</button>
+          <div class="nav-sep"></div>
+          <button class="nav-item" data-view="console" data-icon="terminal">Консоль</button>
+          <button class="nav-item" data-view="settings" data-icon="settings">Настройки</button>
+        </nav>
+
+        <button class="account-card" id="account-card"></button>
+      </aside>
+
+      <main class="content">
+        <div class="view" id="view"></div>
+        <div class="statusbar">
+          <span class="dot" id="status-dot"></span>
+          <span id="status-text">Запуск…</span>
+          <span class="bar"><i id="status-bar-fill"></i></span>
+        </div>
+      </main>
+    </div>
+
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script src="js/icons.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
