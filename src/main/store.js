@@ -52,6 +52,7 @@ const DEFAULT_SETTINGS = {
   friendCode: '',           // постоянный код для друзей
   autoAddFriendServers: true,
   proxies: [],              // свои SOCKS5-прокси для смены IP
+  accountServer: '',        // адрес сервера учётных записей Kubick
 };
 
 class Store {

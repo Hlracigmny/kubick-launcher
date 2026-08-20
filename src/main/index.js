@@ -1,6 +1,7 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, shell, dialog, nativeTheme, Tray, Menu, nativeImage, screen } = require('electron');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 
 const P = require('./paths');
@@ -24,6 +25,9 @@ const mcping = require('./mcping');
 const serverList = require('./servers');
 const instanceIO = require('./instance-io');
 const proxy = require('./proxy');
+const crash = require('./crash');
+const loaderSwitch = require('./loader-switch');
+const kubickAccount = require('./auth/kubick-account');
 
 let win = null;
 let tray = null;
@@ -239,6 +243,13 @@ handle('versions:list', async (opts) => {
 
 handle('loader:versions', async ({ loader, mcVersion }) => instances.loaderVersions(loader, mcVersion));
 
+/* --------------------- Смена загрузчика сборки ---------------------- */
+
+handle('loader:available', async ({ mcVersion }) => loaderSwitch.availableLoaders(mcVersion));
+handle('loader:plan', async ({ instanceId, loader }) => loaderSwitch.plan(instanceId, loader));
+handle('loader:apply', async (payload) =>
+  loaderSwitch.apply(payload, (p) => send('task:progress', { scope: 'loader', ...p })));
+
 /* ---------------------------- Сборки ------------------------------- */
 
 handle('instances:list', async () => {
@@ -428,9 +439,25 @@ handle('java:pick', async () => {
     filters: process.platform === 'win32' ? [{ name: 'Java', extensions: ['exe'] }] : [],
   });
   if (result.canceled || !result.filePaths.length) return null;
-  const info = await javaMod.probe(result.filePaths[0]);
-  if (!info) throw new Error('Это не похоже на рабочий java-файл');
-  return info;
+
+  const check = await javaMod.validate(result.filePaths[0]);
+  if (!check.ok) throw new Error(check.error);
+  return { ...check.info, warning: check.warning || null };
+});
+
+handle('java:validate', async ({ javaPath }) => javaMod.validate(javaPath));
+
+// Что требуется конкретной сборке — чтобы интерфейс мог предложить нужную версию
+handle('java:requirement', async ({ instanceId }) => {
+  const inst = store.getInstance(instanceId);
+  if (!inst) throw new Error('Сборка не найдена');
+  const requirement = javaMod.requirementFor({ id: inst.versionId, inheritsFrom: inst.mcVersion });
+  const available = await javaMod.scan(false, store.settings);
+  return {
+    ...requirement,
+    available: available.map((j) => ({ major: j.major, path: j.path, source: j.source, version: j.version })),
+    satisfied: available.some((j) => javaMod.fits(j.major, requirement)),
+  };
 });
 
 /* ------------------------------ Моды ------------------------------- */
@@ -525,6 +552,24 @@ handle('inst:addFiles', async ({ id, sub, kind }) => {
   }
   return { added };
 });
+
+/* ------------------------ Аккаунт Kubick ---------------------------- */
+
+handle('account:status', async () => kubickAccount.snapshot());
+handle('account:restore', async () => kubickAccount.restore());
+handle('account:register', async (payload) => kubickAccount.register(payload));
+handle('account:login', async (payload) => kubickAccount.login(payload));
+handle('account:logout', async () => kubickAccount.logout());
+handle('account:password', async (payload) => kubickAccount.changePassword(payload));
+handle('account:friends', async () => kubickAccount.friends());
+handle('account:addFriend', async ({ username }) => kubickAccount.addFriend(username));
+
+/* ---------------------------- Падения ------------------------------ */
+
+handle('crash:list', async ({ instanceId }) => crash.list(instanceId));
+handle('crash:remove', async ({ instanceId, at }) => crash.remove(instanceId, at));
+handle('crash:clear', async ({ instanceId }) => crash.clear(instanceId));
+handle('crash:open', async ({ file }) => { await shell.openPath(file); return true; });
 
 handle('inst:pingServers', async ({ addresses }) => mcping.pingAll(addresses));
 handle('inst:openFile', async ({ file }) => { await shell.openPath(file); return true; });
@@ -630,6 +675,28 @@ handle('logs:read', async ({ id }) => {
 
 /* ---------------------------- Жизненный цикл ----------------------- */
 
+/**
+ * Минимальная поддерживаемая Windows. Планку задаёт Electron: с версии 23
+ * он собран на Chromium 110, а тот не запускается на Windows 7, 8 и 8.1.
+ * Установщик проверяет это заранее (build/installer.nsh), но портативная
+ * сборка ставится мимо него, да и планка со временем поднимается —
+ * поэтому проверяем ещё и здесь, чтобы вместо молчаливого выхода
+ * пользователь увидел причину.
+ */
+const MIN_WINDOWS_RELEASE = 10;
+
+function checkWindowsVersion() {
+  if (process.platform !== 'win32') return true;
+  const major = parseInt(String(os.release()).split('.')[0], 10);
+  if (!Number.isFinite(major) || major >= MIN_WINDOWS_RELEASE) return true;
+
+  dialog.showErrorBox('Windows не поддерживается',
+    'Kubick Launcher требует Windows 10 или новее.\n\n' +
+    'Обнаружена Windows с версией ядра ' + os.release() + '. Программа построена на Chromium 130, ' +
+    'а он на Windows 7, 8 и 8.1 не работает.');
+  return false;
+}
+
 // Запуск из исходников не должен воевать с установленной версией за блокировку
 if (!app.isPackaged) {
   app.setPath('userData', path.join(app.getPath('userData'), 'dev'));
@@ -642,6 +709,7 @@ if (!gotLock) {
   app.on('second-instance', () => showWindow());
 
   app.whenReady().then(() => {
+    if (!checkWindowsVersion()) { app.quit(); return; }
     nativeTheme.themeSource = 'dark';
     createWindow();
     updater.init((snapshot) => send('updates:changed', snapshot));

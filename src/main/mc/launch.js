@@ -6,6 +6,7 @@ const P = require('../paths');
 const R = require('./rules');
 const { installVersion } = require('./install');
 const javaMod = require('../java');
+const crash = require('../crash');
 
 const CP_SEP = process.platform === 'win32' ? ';' : ':';
 const LAUNCHER_NAME = 'KubickLauncher';
@@ -152,9 +153,13 @@ async function launchInstance(instance, account, settings, onEvent, options) {
   const version = installed.version;
 
   const javaInfo = await javaMod.resolveJava(version, settings, (p) => emit('progress', p));
-  if (javaInfo.major < javaMod.requiredMajor(version)) {
-    throw new Error('Для ' + versionId + ' нужна Java ' + javaMod.requiredMajor(version) +
-      ', а выбрана Java ' + javaInfo.major + '. Измените путь в настройках.');
+  const requirement = javaInfo.requirement || javaMod.requirementFor(version);
+  // Проверяем обе границы: слишком новая Java ломает старые версии не хуже слишком старой
+  if (!javaMod.fits(javaInfo.major, requirement)) {
+    const side = requirement.max != null && javaInfo.major > requirement.max ? 'новее' : 'старее';
+    throw new Error('Minecraft ' + requirement.mcVersion + ' требует Java ' + requirement.required +
+      ', а выбрана Java ' + javaInfo.major + ' — она ' + side + ' нужной. ' +
+      (requirement.note || '') + ' Настройки → Путь к Java.');
   }
 
   const gameDir = instance.isolated === false ? P.root : P.instanceDir(instance.id);
@@ -214,50 +219,41 @@ async function launchInstance(instance, account, settings, onEvent, options) {
     running.delete(instance.id);
     logStream.end();
     const seconds = Math.round((Date.now() - state.startedAt) / 1000);
-    let error = null;
-    // Принудительная остановка пользователем всегда даёт ненулевой код — это не сбой игры
-    if (code !== 0 && !state.stopping) {
-      const hint = diagnose(state.tail, code);
-      error = 'Игра завершилась с кодом ' + code + (hint ? '. ' + hint : '');
-    }
-    emit('exit', { code, error, seconds, logFile, stopped: Boolean(state.stopping), tail: state.tail.slice(-40) });
+
+    // Принудительная остановка пользователем всегда даёт ненулевой код — это не сбой игры.
+    // record сам решает, писать ли запись, и разбирает причину вместе с отчётом игры.
+    const entry = crash.record({
+      instanceId: instance.id,
+      instanceName: instance.name,
+      versionId: version.id,
+      java: javaInfo.major,
+      code,
+      tail: state.tail,
+      logFile,
+      instanceDir: gameDir,
+      startedAt: state.startedAt,
+      stopped: Boolean(state.stopping),
+    });
+
+    const cause = entry && entry.cause;
+    const error = entry
+      ? (cause ? cause.title + '. ' + cause.fix
+        : 'Игра завершилась с кодом ' + code + '. Подробности — в разделе «Падения»')
+      : null;
+
+    emit('exit', {
+      code, error, seconds, logFile,
+      stopped: Boolean(state.stopping),
+      tail: state.tail.slice(-40),
+      crash: entry ? { at: entry.at, cause: entry.cause, description: entry.description } : null,
+    });
   });
 
   emit('started', { pid: child.pid, versionId: version.id, java: javaInfo.major, logFile });
   return { pid: child.pid, versionId: version.id, java: javaInfo.major, logFile };
 }
 
-/** Превращает типовые падения в понятную подсказку вместо голого кода выхода. */
-function diagnose(tail, code) {
-  const text = tail.join('\n');
-  // Битые аргументы JVM — процесс падает мгновенно, без единой строки от самой игры
-  if (/Unrecognized VM option|Unrecognized option|is experimental and must be enabled/i.test(text)) {
-    const bad = /option '([^']+)'/i.exec(text);
-    return 'Некорректный аргумент JVM' + (bad ? ' — ' + bad[1] : '') +
-      '. Откройте Настройки → Аргументы JVM и исправьте или очистите поле';
-  }
-  if (/Could not create the Java Virtual Machine/i.test(text)) {
-    return 'JVM не запустилась — проверьте аргументы JVM и объём выделенной памяти в настройках';
-  }
-  if (/OutOfMemoryError|Could not reserve enough space/i.test(text)) {
-    return 'Не хватило памяти — уменьшите выделенную RAM или закройте другие программы';
-  }
-  if (/UnsupportedClassVersionError/i.test(text)) {
-    return 'Несовместимая версия Java для этой сборки';
-  }
-  // Только реальные отказы графики: простое упоминание OpenGL встречается в обычных логах
-  if (/Pixel format not accelerated|Failed to create window|GLFW error|Couldn't create GL context|no OpenGL context|OpenGL 3\.2|GLFW_[A-Z_]*ERROR/i.test(text)) {
-    return 'Проблема с видеодрайвером — обновите драйверы GPU';
-  }
-  if (/Missing or unsupported mandatory dependencies|Mod .* requires/i.test(text)) {
-    return 'Конфликт модов: не хватает зависимостей — проверьте вкладку «Моды»';
-  }
-  if (/java\.lang\.NoClassDefFoundError|ClassNotFoundException/i.test(text)) {
-    return 'Повреждены библиотеки — переустановите версию';
-  }
-  if (code === 1) return 'Смотрите лог для подробностей';
-  return '';
-}
+// Разбор причин падения живёт в crash.js — там же он и пишется в журнал
 
 function stop(instanceId) {
   const state = running.get(instanceId);

@@ -1,6 +1,6 @@
 {
   "name": "kubick-launcher",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Современный лаунчер Minecraft: Vanilla, Fabric, Quilt, Forge, NeoForge + каталог модов Modrinth/CurseForge",
   "main": "src/main/index.js",
   "repository": "https://github.com/Hlracigmny/kubick-launcher",
@@ -75,7 +75,9 @@
       "deleteAppDataOnUninstall": false,
       "runAfterFinish": true,
       "language": "1049",
-      "artifactName": "Kubick-Launcher-Setup-${version}.${ext}"
+      "artifactName": "Kubick-Launcher-Setup-${version}.${ext}",
+      "include": "build/installer.nsh",
+      "warningsAsErrors": false
     },
     "portable": {
       "artifactName": "Kubick-Launcher-${version}-portable.${ext}"
@@ -95,5 +97,8 @@
         "dmg"
       ]
     }
+  },
+  "engines": {
+    "node": ">=20.18.0"
   }
 }

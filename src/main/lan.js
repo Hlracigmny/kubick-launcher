@@ -1,5 +1,6 @@
 'use strict';
 const dgram = require('dgram');
+const discovery = require('./netdiscovery');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -114,12 +115,14 @@ function start(onChange) {
   });
 
   sock.on('listening', () => {
-    try {
-      sock.addMembership(MULTICAST_ADDR);
-      status = { listening: true, error: null };
-    } catch (e) {
-      status = { listening: false, error: 'Сеть недоступна: ' + e.message };
-    }
+    // Подписываемся на каждом интерфейсе: на машине с VPN или Hyper-V основным
+    // оказывается виртуальный адаптер, и пакеты из настоящей сети не приходят
+    const membership = discovery.joinOnAllInterfaces(sock, MULTICAST_ADDR);
+    try { sock.setBroadcast(true); } catch { /* не всякий адаптер это умеет */ }
+
+    status = membership.joined.length
+      ? { listening: true, error: null, interfaces: membership.joined.length }
+      : { listening: false, error: discovery.describe(membership, false) };
     push();
   });
 
@@ -147,6 +150,10 @@ function start(onChange) {
 function stop() {
   if (sweeper) { clearInterval(sweeper); sweeper = null; }
   if (socket) {
+    // Отписываемся на каждом интерфейсе, где подписывались
+    for (const iface of discovery.ipv4Interfaces()) {
+      try { socket.dropMembership(MULTICAST_ADDR, iface.address); } catch { /* не подписаны */ }
+    }
     try { socket.dropMembership(MULTICAST_ADDR); } catch { /* уже отвалилось */ }
     try { socket.close(); } catch { /* уже закрыт */ }
     socket = null;

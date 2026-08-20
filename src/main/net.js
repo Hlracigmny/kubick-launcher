@@ -77,9 +77,9 @@ async function fetchJson(url, opts = {}) {
   }
 }
 
-function sha1File(file) {
+function hashFile(file, algorithm) {
   return new Promise((resolve, reject) => {
-    const h = crypto.createHash('sha1');
+    const h = crypto.createHash(algorithm);
     const s = fs.createReadStream(file);
     s.on('error', reject);
     s.on('data', (d) => h.update(d));
@@ -87,12 +87,17 @@ function sha1File(file) {
   });
 }
 
+function sha1File(file) { return hashFile(file, 'sha1'); }
+function sha256File(file) { return hashFile(file, 'sha256'); }
+
 // Файл считается валидным, только если совпал хеш (или, при отсутствии хеша, размер).
-async function isValid(file, sha1, size) {
+async function isValid(file, sha1, size, sha256) {
   try {
     const st = await fs.promises.stat(file);
     if (!st.isFile() || st.size === 0) return false;
     if (typeof size === 'number' && size > 0 && st.size !== size) return false;
+    // Mojang подписывает файлы sha1, Adoptium — sha256; поддерживаем оба
+    if (sha256) return (await sha256File(file)) === String(sha256).toLowerCase();
     if (sha1) return (await sha1File(file)) === sha1.toLowerCase();
     return true;
   } catch {
@@ -105,8 +110,8 @@ async function isValid(file, sha1, size) {
  * Пишем во временный файл и переименовываем — так частично скачанный файл
  * никогда не попадёт в кеш и не сломает следующий запуск.
  */
-async function downloadFile(url, dest, { sha1, size, attempts = 4, onBytes } = {}) {
-  if (await isValid(dest, sha1, size)) return { skipped: true, dest };
+async function downloadFile(url, dest, { sha1, sha256, size, attempts = 4, onBytes } = {}) {
+  if (await isValid(dest, sha1, size, sha256)) return { skipped: true, dest };
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   const tmp = dest + '.part';
   let lastErr;
@@ -121,8 +126,8 @@ async function downloadFile(url, dest, { sha1, size, attempts = 4, onBytes } = {
       }
       if (onBytes) res.on('data', (c) => onBytes(c.length));
       await pipeline(res, fs.createWriteStream(tmp));
-      if (sha1 || size) {
-        const ok = await isValid(tmp, sha1, size);
+      if (sha1 || sha256 || size) {
+        const ok = await isValid(tmp, sha1, size, sha256);
         if (!ok) throw new Error('Контрольная сумма не совпала: ' + path.basename(dest));
       }
       await fs.promises.rm(dest, { force: true });
@@ -158,4 +163,4 @@ async function pool(items, limit, worker) {
   }
 }
 
-module.exports = { fetchBuffer, fetchJson, downloadFile, downloadPool: pool, sha1File, isValid, request, readBody, sleep };
+module.exports = { fetchBuffer, fetchJson, downloadFile, downloadPool: pool, sha1File, sha256File, hashFile, isValid, request, readBody, sleep };

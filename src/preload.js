@@ -66,11 +66,6 @@ contextBridge.exposeInMainWorld('api', {
     remove: (id) => call('accounts:remove', { id }),
     setActive: (id) => call('accounts:setActive', { id }),
   },
-  java: {
-    scan: () => call('java:scan'),
-    install: (major) => call('java:install', { major }),
-    pick: () => call('java:pick'),
-  },
   mods: {
     search: (opts) => call('mods:search', opts),
     versions: (opts) => call('mods:versions', opts),
@@ -89,6 +84,35 @@ contextBridge.exposeInMainWorld('api', {
     status: () => call('proxy:status'),
     start: (id) => call('proxy:start', { id }),
     stop: () => call('proxy:stop'),
+  },
+  account: {
+    status: () => call('account:status'),
+    restore: () => call('account:restore'),
+    register: (payload) => call('account:register', payload),
+    login: (payload) => call('account:login', payload),
+    logout: () => call('account:logout'),
+    changePassword: (payload) => call('account:password', payload),
+    friends: () => call('account:friends'),
+    addFriend: (username) => call('account:addFriend', { username }),
+  },
+  loader: {
+    versions: (loader, mcVersion) => call('loader:versions', { loader, mcVersion }),
+    available: (mcVersion) => call('loader:available', { mcVersion }),
+    plan: (instanceId, loader) => call('loader:plan', { instanceId, loader }),
+    apply: (payload) => call('loader:apply', payload),
+  },
+  java: {
+    scan: () => call('java:scan'),
+    install: (major) => call('java:install', { major }),
+    pick: () => call('java:pick'),
+    validate: (javaPath) => call('java:validate', { javaPath }),
+    requirement: (instanceId) => call('java:requirement', { instanceId }),
+  },
+  crash: {
+    list: (instanceId) => call('crash:list', { instanceId }),
+    remove: (instanceId, at) => call('crash:remove', { instanceId, at }),
+    clear: (instanceId) => call('crash:clear', { instanceId }),
+    open: (file) => call('crash:open', { file }),
   },
   servers: {
     list: () => call('servers:list'),

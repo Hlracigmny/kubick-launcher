@@ -41,6 +41,7 @@
     proxyChecks: {},
     servers: null,
     friends: null,
+    account: null,
   };
 
   const LOADER_GLYPH = { vanilla: 'MC', fabric: 'FA', quilt: 'QU', forge: 'FO', neoforge: 'NE' };
@@ -126,10 +127,63 @@
     render();
   }
 
+  /**
+   * Позиция прокрутки при перерисовке.
+   *
+   * Интерфейс без сборщика: render() каждый раз собирает разметку заново, и все
+   * узлы списка — новые. Обычного «сохранить scrollTop и вернуть» мало: если
+   * элемент выше текущей позиции удалили, список стал короче, и та же цифра
+   * показывает уже другое место. Поэтому запоминаем не число, а якорь —
+   * конкретный элемент с устойчивым data-id и его смещение относительно верха
+   * окна. После перерисовки ставим этот же элемент на то же место.
+   */
+  let renderedView = null;
+
+  function captureScroll(host) {
+    const top = host.scrollTop;
+    const atBottom = host.scrollHeight - top - host.clientHeight < 40;
+    const hostTop = host.getBoundingClientRect().top;
+
+    // Первый элемент, который видно целиком — он и будет якорем
+    let anchor = null;
+    for (const node of host.querySelectorAll('[data-id]')) {
+      const offset = node.getBoundingClientRect().top - hostTop;
+      if (offset >= -1) { anchor = { id: node.dataset.id, offset }; break; }
+    }
+    return { top, atBottom, anchor };
+  }
+
+  function restoreScroll(host, saved) {
+    if (!saved) { host.scrollTop = 0; return; }
+
+    // Якорь важнее всего остального: он один правильно отрабатывает случай,
+    // когда элемент выше текущей позиции удалили и список стал короче
+    if (saved.anchor) {
+      const node = host.querySelector('[data-id="' + (window.CSS && CSS.escape ? CSS.escape(saved.anchor.id) : saved.anchor.id) + '"]');
+      if (node) {
+        const hostTop = host.getBoundingClientRect().top;
+        const offset = node.getBoundingClientRect().top - hostTop;
+        // Ставим якорь ровно туда, где он был: сдвиг из-за удалённых выше учтётся сам
+        host.scrollTop = Math.max(0, host.scrollTop + offset - saved.anchor.offset);
+        return;
+      }
+    }
+
+    // Якоря не стало (список опустел или сменился целиком). Если стояли внизу —
+    // остаёмся внизу, иначе возвращаем число, обрезав его по новой высоте.
+    if (saved.atBottom && saved.top > 0) {
+      host.scrollTop = host.scrollHeight;
+      return;
+    }
+    host.scrollTop = Math.min(saved.top, Math.max(0, host.scrollHeight - host.clientHeight));
+  }
+
   function render() {
     const def = VIEWS[state.view];
     const host = $('#view');
-    host.scrollTop = 0;
+    // Смена раздела всегда начинается сверху, перерисовка того же — нет
+    const saved = renderedView === state.view ? captureScroll(host) : null;
+    renderedView = state.view;
     host.innerHTML =
       '<div class="page-head">' +
         '<div><h1>' + esc(def.title) + '</h1><p>' + esc(def.subtitle) + '</p></div>' +
@@ -137,6 +191,8 @@
       '</div>' +
       '<div id="view-body"></div>';
     def.render($('#view-body'), $('#head-actions'));
+    // Восстанавливаем синхронно, до отрисовки кадра — иначе виден рывок
+    restoreScroll(host, saved);
   }
 
   /* =========================== Библиотека =========================== */
@@ -368,6 +424,7 @@
     { id: 'worlds', label: 'Миры', icon: 'library' },
     { id: 'servers', label: 'Серверы', icon: 'network' },
     { id: 'screenshots', label: 'Снимки экрана', icon: 'grid' },
+    { id: 'crashes', label: 'Падения', icon: 'shield' },
     { id: 'settings', label: 'Параметры', icon: 'sliders' },
     { id: 'logs', label: 'Другие журналы', icon: 'rows' },
   ];
@@ -969,6 +1026,163 @@
 
     /* ----------------------------- Параметры ---------------------------- */
 
+    /* ------------------------ Смена загрузчика ----------------------- */
+
+    /**
+     * Смена загрузчика у готовой сборки. Миры, настройки и наборы остаются на месте —
+     * меняются только файлы игры и, по выбору, папка модов: моды Fabric с Forge
+     * несовместимы, преобразовать их автоматически невозможно.
+     */
+    async function openLoaderSwitch() {
+      let plan = null;
+      let loaders = null;
+      await guard('Не удалось получить список загрузчиков', async () => {
+        [plan, loaders] = await Promise.all([
+          window.api.loader.plan(inst.id, inst.loader),
+          window.api.loader.available(inst.mcVersion),
+        ]);
+      });
+      if (!plan || !loaders) return;
+
+      const body = el('<div class="stack"></div>');
+      body.appendChild(el('<div class="hint">Показаны только загрузчики, которые существуют ' +
+        'для Minecraft ' + esc(inst.mcVersion) + '. Список берётся у самих загрузчиков.</div>'));
+
+      /* --- Выбор загрузчика --- */
+      let chosen = inst.loader;
+      const grid = el('<div class="loader-grid"></div>');
+      for (const l of loaders) {
+        const card = el(
+          '<button class="loader-card' + (l.id === chosen ? ' active' : '') +
+            (l.available ? '' : ' disabled') + '" data-loader="' + esc(l.id) + '">' +
+            '<b>' + esc(l.label) + '</b>' +
+            '<span>' + (l.available
+              ? (l.id === 'vanilla' ? 'без модов' : 'версий: ' + l.versions.length)
+              : 'нет для ' + esc(inst.mcVersion)) + '</span>' +
+            (l.id === inst.loader ? '<i class="loader-now">сейчас</i>' : '') +
+          '</button>'
+        );
+        if (!l.available) card.disabled = true;
+        card.addEventListener('click', () => {
+          chosen = l.id;
+          for (const c of grid.querySelectorAll('.loader-card')) {
+            c.classList.toggle('active', c.dataset.loader === chosen);
+          }
+          fillVersions();
+          fillWarning();
+        });
+        grid.appendChild(card);
+      }
+      body.appendChild(grid);
+
+      /* --- Версия загрузчика --- */
+      const verField = el('<div class="field"><label>Версия загрузчика</label></div>');
+      const verSel = el('<select class="select"></select>');
+      const verHint = el('<span class="hint">По умолчанию — последняя стабильная.</span>');
+      verField.appendChild(verSel);
+      verField.appendChild(verHint);
+      body.appendChild(verField);
+
+      function fillVersions() {
+        const l = loaders.find((x) => x.id === chosen);
+        const list = (l && l.versions) || [];
+        verField.hidden = chosen === 'vanilla' || !list.length;
+        verSel.innerHTML = list.map((v) => {
+          const id = v.id || v.version || v;
+          const stable = v.stable === true || /^[\d.]+$/.test(String(id));
+          return '<option value="' + esc(String(id)) + '">' + esc(String(id)) +
+            (stable ? '' : ' · нестабильная') + '</option>';
+        }).join('');
+      }
+
+      /* --- Что делать с модами --- */
+      const modsBox = el('<div class="field"><label>Установленные моды</label></div>');
+      const modsChoice = el('<div class="stack" style="gap:6px"></div>');
+      let modsAction = 'backup';
+      const options = [
+        ['backup', 'Перенести в резервную папку', 'Папка mods переедет в ' + esc(plan.backupName) + ' — ничего не потеряется'],
+        ['delete', 'Удалить', 'Файлы будут стёрты безвозвратно'],
+        ['keep', 'Оставить как есть', 'Игра, скорее всего, не запустится: моды от другого загрузчика'],
+      ];
+      for (const [value, title, note] of options) {
+        const row = el(
+          '<label class="io-part"><input type="radio" name="mods-action" value="' + value + '"' +
+            (value === modsAction ? ' checked' : '') + '>' +
+          '<span class="io-part-name"><b>' + title + '</b>' +
+          '<span class="muted" style="display:block;font-size:11.5px">' + note + '</span></span></label>'
+        );
+        row.querySelector('input').addEventListener('change', () => { modsAction = value; });
+        modsChoice.appendChild(row);
+      }
+      modsBox.appendChild(modsChoice);
+
+      const warning = el('<div class="net-note"></div>');
+      body.appendChild(warning);
+
+      function fillWarning() {
+        const sameLoader = chosen === inst.loader;
+        modsBox.hidden = plan.mods === 0 || sameLoader;
+        if (!plan.mods) {
+          warning.textContent = 'Модов в сборке нет — переносить нечего.';
+        } else if (sameLoader) {
+          warning.textContent = 'Загрузчик тот же, меняется только его версия. Моды останутся на месте.';
+        } else {
+          warning.innerHTML = '<b style="color:var(--text)">Модов в сборке: ' + plan.mods + '.</b> ' +
+            'Моды ' + esc(plan.from.label) + ' с ' + esc((loaders.find((l) => l.id === chosen) || {}).label || chosen) +
+            ' несовместимы, автоматического преобразования не существует.';
+        }
+      }
+
+      body.appendChild(modsBox);
+      body.appendChild(el('<div class="hint">Останутся нетронутыми: миры, настройки игры, ' +
+        'наборы ресурсов и шейдеров, снимки экрана и конфиги модов.</div>'));
+
+      fillVersions();
+      fillWarning();
+
+      const choice = await modal({
+        title: 'Загрузчик модов',
+        subtitle: inst.name + ' · Minecraft ' + inst.mcVersion,
+        body,
+        wide: true,
+        buttons: [
+          { label: 'Отмена', value: null },
+          { label: 'Применить', kind: 'primary', value: 'apply' },
+        ],
+      });
+      if (choice !== 'apply') return;
+
+      const loaderVersion = chosen === 'vanilla' ? null : (verSel.value || null);
+      if (chosen === inst.loader && loaderVersion === inst.loaderVersion) {
+        toast('Ничего не изменилось', 'Загрузчик и его версия те же');
+        return;
+      }
+
+      window.UI.closeModal();
+      await guard('Не удалось сменить загрузчик', async () => {
+        setStatus('Меняем загрузчик…', 0, 'busy');
+        try {
+          const res = await window.api.loader.apply({
+            instanceId: inst.id, loader: chosen, loaderVersion, modsAction,
+          });
+          await loadInstances();
+          // Данные окна сборки устарели целиком: версия, моды и компоненты другие
+          delete ui.data.components;
+          delete ui.data.mods;
+          delete ui.data.crashes;
+          Object.assign(inst, res.instance);
+          paint();
+          render();
+          const moved = res.mods.action === 'backup'
+            ? ', моды перенесены в ' + res.mods.to
+            : res.mods.action === 'delete' ? ', моды удалены' : '';
+          toastOk('Загрузчик сменён', res.from + ' → ' + res.to + moved);
+        } finally {
+          setStatus('Готов к работе', 0, '');
+        }
+      });
+    }
+
     function sectionSettings(target) {
       const effective = (key) => (key in ui.overrides ? ui.overrides[key] : state.settings[key]);
       const isOwn = (key) => key in ui.overrides;
@@ -1004,6 +1218,18 @@
         '<div class="panel" data-role="panel"></div></div>'
       );
       const panel = wrap.querySelector('[data-role="panel"]');
+
+      // Загрузчик — свойство самой сборки, а не переопределение общей настройки
+      const loaderRow = el(
+        '<div class="row"><div class="row-info"><b>Загрузчик модов</b>' +
+        '<span>' + esc(inst.loaderLabel || inst.loader) +
+        (inst.loaderVersion ? ' ' + esc(inst.loaderVersion) : '') +
+        ' · Minecraft ' + esc(inst.mcVersion) + '</span></div></div>'
+      );
+      const loaderCtl = el('<div class="row-ctl"></div>');
+      loaderCtl.appendChild(button('Сменить', I.package, 'sm', openLoaderSwitch));
+      loaderRow.appendChild(loaderCtl);
+      panel.appendChild(loaderRow);
 
       panel.appendChild(overrideRow('Оперативная память', 'Сколько выделять этой сборке', 'memoryMb', (ctl) => {
         const box = el('<div style="display:flex;align-items:center;gap:10px;width:270px"></div>');
@@ -1459,6 +1685,112 @@
       if (done) toastOk('Скачано: ' + done, 'Файлы уже в папке сборки');
     }
 
+    /* ---------------------------- Падения ---------------------------- */
+
+    /**
+     * Журнал падений сборки. Обычный лог перезаписывается при каждом запуске,
+     * поэтому разбор вчерашнего падения берётся отсюда, а не из него.
+     */
+    function sectionCrashes(target) {
+      const { main, aside } = split(target, 'Падения',
+        'Что случилось, почему и что с этим делать. Записи хранятся отдельно от логов.');
+
+      const items = ensure('crashes', () => window.api.crash.list(inst.id), main, 160);
+      if (!items) return;
+
+      if (!items.length) {
+        main.appendChild(el(
+          '<div class="empty" style="padding:34px">' + I.check +
+          '<h3>Падений не было</h3>' +
+          '<p>Здесь появятся записи, если игра завершится с ошибкой. ' +
+          'Обычный выход из игры записью не считается.</p></div>'
+        ));
+      } else {
+        const list = el('<div class="stack" style="gap:10px"></div>');
+        for (const entry of items) list.appendChild(crashRow(entry));
+        main.appendChild(list);
+      }
+
+      aside.appendChild(button('Обновить', I.refresh, 'sm block', () => reload('crashes')));
+      aside.appendChild(button('Папка отчётов игры', I.folder, 'sm block',
+        () => window.api.instances.openFolder(inst.id, 'crash-reports')));
+      if (items.length) {
+        aside.appendChild(button('Очистить журнал', I.trash, 'danger sm block', async () => {
+          const yes = await confirm('Очистить журнал падений?',
+            'Записей: ' + items.length + '. Отчёты самой игры в папке crash-reports останутся.', true);
+          if (!yes) return;
+          await guard('Не удалось очистить', async () => {
+            await window.api.crash.clear(inst.id);
+            reload('crashes');
+          });
+        }));
+      }
+    }
+
+    function crashRow(entry) {
+      const cause = entry.cause;
+      const row = el(
+        '<div class="crash-row' + (cause ? '' : ' unknown') + '">' +
+          '<div class="crash-head">' +
+            '<b>' + esc(cause ? cause.title : 'Причина не определена') + '</b>' +
+            '<span class="crash-when">' + esc(formatDate(entry.at)) + '</span>' +
+          '</div>' +
+          '<div class="crash-meta">' +
+            '<span class="chip">код ' + esc(String(entry.code)) + '</span>' +
+            (entry.versionId ? '<span class="chip">' + esc(entry.versionId) + '</span>' : '') +
+            (entry.java ? '<span class="chip">Java ' + esc(String(entry.java)) + '</span>' : '') +
+            (entry.playedSeconds != null
+              ? '<span class="chip">через ' + esc(formatDuration(entry.playedSeconds)) + '</span>' : '') +
+          '</div>' +
+          (cause
+            ? '<p class="crash-why">' + esc(cause.why) + '</p>' +
+              '<p class="crash-fix">' + I.wrench + esc(cause.fix) + '</p>' +
+              (cause.detail ? '<p class="crash-detail mono">' + esc(cause.detail) + '</p>' : '')
+            : '<p class="crash-why">Ничего узнаваемого в логе не нашлось. ' +
+              'Откройте полный отчёт — там есть стек и список модов.</p>') +
+          (entry.description
+            ? '<p class="crash-detail">Игра сообщила: <span class="mono">' + esc(entry.description) + '</span></p>' : '') +
+          (entry.exception
+            ? '<p class="crash-detail mono">' + esc(entry.exception.slice(0, 160)) + '</p>' : '') +
+        '</div>'
+      );
+
+      const actions = el('<div class="crash-actions"></div>');
+      if (entry.gameReport) {
+        actions.appendChild(button('Отчёт игры', I.external, 'sm',
+          () => window.api.crash.open(entry.gameReport)));
+      }
+      if (entry.logFile) {
+        actions.appendChild(button('Лог запуска', I.terminal, 'sm',
+          () => window.api.crash.open(entry.logFile)));
+      }
+      actions.appendChild(button('Скопировать', I.copy, 'sm', async () => {
+        const text = [
+          (cause ? cause.title : 'Причина не определена'),
+          'Код выхода: ' + entry.code,
+          entry.versionId ? 'Версия: ' + entry.versionId : '',
+          entry.java ? 'Java: ' + entry.java : '',
+          entry.description ? 'Описание: ' + entry.description : '',
+          '',
+          (entry.tail || []).join('\n'),
+        ].filter(Boolean).join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          toastOk('Скопировано', 'Можно отправить тому, кто поможет разобраться');
+        } catch {
+          toastErr('Не удалось скопировать');
+        }
+      }));
+      actions.appendChild(iconButton(I.trash, 'Удалить запись', async () => {
+        await guard('Не удалось удалить', async () => {
+          await window.api.crash.remove(entry.instanceId, entry.at);
+          reload('crashes');
+        });
+      }));
+      row.appendChild(actions);
+      return row;
+    }
+
     const SECTION_RENDER = {
       log: sectionLog,
       version: sectionVersion,
@@ -1473,6 +1805,7 @@
       screenshots: sectionScreenshots,
       settings: sectionSettings,
       logs: sectionLogs,
+      crashes: sectionCrashes,
       catalog: sectionCatalog,
     };
 
@@ -2269,7 +2602,7 @@
   function modCard(item, inst) {
     const initials = esc(String(item.name || '?').slice(0, 2).toUpperCase());
     const card = el(
-      '<div class="mod-card">' +
+      '<div class="mod-card" data-id="' + esc(item.source + ':' + item.id) + '">' +
         '<div class="mod-icon">' + (item.icon ? '<img loading="lazy" src="' + esc(item.icon) + '" alt="">' : initials) + '</div>' +
         '<div class="mod-main">' +
           '<div class="mod-title">' +
@@ -2522,9 +2855,189 @@
 
   /* ============================ Аккаунты ============================ */
 
+  /* ========================= Аккаунт Kubick ========================= */
+
+  /**
+   * Свой аккаунт лаунчера: вход по нику и паролю, без Microsoft.
+   * Отдельно от игровых профилей — это учётная запись самого лаунчера,
+   * она нужна друзьям и синхронизации, а игра запускается и без неё.
+   */
+  function kubickAccountPanel() {
+    const acc = state.account;
+    const panel = el(
+      '<div class="panel">' +
+        '<h2>Аккаунт Kubick</h2>' +
+        '<p class="panel-sub">Общая учётная запись лаунчера: друзья и синхронизация. ' +
+        'Для запуска игры она не обязательна.</p>' +
+        '<div data-role="body"></div>' +
+      '</div>'
+    );
+    const body = panel.querySelector('[data-role="body"]');
+
+    if (!acc) {
+      body.appendChild(el('<div class="skeleton" style="height:56px"></div>'));
+      loadAccount().then(() => { if (state.view === 'accounts') render(); });
+      return panel;
+    }
+
+    if (acc.problem) {
+      body.appendChild(el('<div class="net-note err">' + esc(acc.problem) + '</div>'));
+    }
+
+    // Без адреса сервера вход невозможен физически. Предлагать кнопку «Войти»,
+    // которая всегда упадёт, — хуже, чем сказать прямо, чего не хватает.
+    if (!acc.configured) {
+      const empty = el(
+        '<div class="net-empty">' + I.globe +
+          '<b>Сервер аккаунтов не настроен</b>' +
+          '<span>Регистрация и вход по нику работают через свой сервер учётных записей. ' +
+          'Укажите его адрес — и раздел заработает. Для запуска игры это не нужно: ' +
+          'подойдёт офлайн-профиль или вход через Microsoft.</span>' +
+        '</div>'
+      );
+      empty.appendChild(button('Открыть настройки', I.settings, 'primary sm', () => {
+        state.settingsPage = 'integrations';
+        go('settings');
+      }));
+      body.appendChild(empty);
+      return panel;
+    }
+
+    if (!acc.signedIn) {
+      const empty = el(
+        '<div class="net-empty">' + I.user +
+          '<b>Вы не вошли</b>' +
+          '<span>Войдите или зарегистрируйтесь — ник станет вашим именем в игре.</span>' +
+        '</div>'
+      );
+      const actions = el('<div class="row-ctl" style="margin-top:10px"></div>');
+      actions.appendChild(button('Войти', I.user, 'primary sm', () => openAccountDialog('login')));
+      actions.appendChild(button('Регистрация', I.plus, 'sm', () => openAccountDialog('register')));
+      empty.appendChild(actions);
+      body.appendChild(empty);
+      return panel;
+    }
+
+    /* --- Вошли --- */
+    const row = el(
+      '<div class="acc-row">' +
+        '<div class="avatar">' + esc(String(acc.user.username || '?').slice(0, 1).toUpperCase()) + '</div>' +
+        '<div class="grow" style="min-width:0">' +
+          '<b>' + esc(acc.user.username) + '</b>' +
+          '<div class="muted" style="font-size:11.5px">' +
+            (acc.user.uuid ? '<span class="mono">' + esc(acc.user.uuid) + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<span class="acc-state ' + (acc.online ? 'on' : 'off') + '">' +
+          (acc.online ? 'в сети' : 'офлайн') + '</span>' +
+      '</div>'
+    );
+    body.appendChild(row);
+
+    if (!acc.online) {
+      body.appendChild(el(
+        '<div class="net-note" style="margin-top:10px">Работаем без связи с сервером. ' +
+        'Играть можно, а друзья и синхронизация недоступны. ' +
+        'Офлайн-вход действует ещё <b style="color:var(--text)">' + acc.offlineDaysLeft +
+        ' дн.</b> — после этого понадобится интернет.</div>'
+      ));
+    }
+
+    const ctl = el('<div class="row-ctl" style="margin-top:12px;flex-wrap:wrap"></div>');
+    if (acc.online) {
+      ctl.appendChild(button('Сменить пароль', I.key, 'sm', () => openAccountDialog('password')));
+    }
+    ctl.appendChild(button('Выйти', I.power, 'sm', async () => {
+      const yes = await confirm('Выйти из аккаунта?',
+        'Офлайн-вход тоже перестанет работать — чтобы вернуться, понадобится интернет.', false);
+      if (!yes) return;
+      await guard('Не удалось выйти', async () => {
+        state.account = await window.api.account.logout();
+        render();
+      });
+    }));
+    body.appendChild(ctl);
+    return panel;
+  }
+
+  /** Одна форма на три случая: вход, регистрация и смена пароля. */
+  async function openAccountDialog(mode) {
+    const isRegister = mode === 'register';
+    const isPassword = mode === 'password';
+
+    const body = el('<div class="stack"></div>');
+    if (isRegister) {
+      body.appendChild(el('<div class="hint">Ник — 3–16 символов, латиница, цифры и подчёркивание: ' +
+        'те же правила, что у Minecraft. Он же станет вашим именем в игре.</div>'));
+    }
+
+    const fields = {};
+    const addField = (key, label, type, hint) => {
+      const field = el('<div class="field"><label>' + esc(label) + '</label>' +
+        '<input class="input" type="' + type + '" data-role="' + key + '">' +
+        (hint ? '<span class="hint">' + esc(hint) + '</span>' : '') + '</div>');
+      fields[key] = field.querySelector('input');
+      body.appendChild(field);
+    };
+
+    if (!isPassword) addField('username', 'Ник', 'text');
+    if (isPassword) addField('password', 'Текущий пароль', 'password');
+    else addField('password', 'Пароль', 'password', isRegister ? 'Не короче 8 символов' : '');
+    if (isPassword) addField('newPassword', 'Новый пароль', 'password', 'Не короче 8 символов');
+    if (isRegister) addField('email', 'Почта, необязательно', 'text', 'Пригодится, если забудете пароль');
+
+    if (isPassword) {
+      body.appendChild(el('<div class="net-note">После смены пароля вход на других устройствах ' +
+        'слетит — там попросят войти заново.</div>'));
+    }
+
+    const choice = await modal({
+      title: isRegister ? 'Регистрация' : isPassword ? 'Смена пароля' : 'Вход в аккаунт Kubick',
+      subtitle: isPassword ? '' : 'Учётная запись лаунчера, не Microsoft',
+      body,
+      buttons: [
+        { label: 'Отмена', value: null },
+        { label: isRegister ? 'Зарегистрироваться' : isPassword ? 'Сменить' : 'Войти', kind: 'primary', value: 'go' },
+      ],
+    });
+    if (choice !== 'go') return;
+
+    const value = (key) => (fields[key] ? fields[key].value.trim() : '');
+    await guard(isRegister ? 'Не удалось зарегистрироваться' : isPassword ? 'Не удалось сменить пароль' : 'Не удалось войти', async () => {
+      if (isRegister) {
+        state.account = await window.api.account.register({
+          username: value('username'), password: fields.password.value, email: value('email') || undefined,
+        });
+        toastOk('Аккаунт создан', state.account.user.username);
+      } else if (isPassword) {
+        state.account = await window.api.account.changePassword({
+          password: fields.password.value, newPassword: fields.newPassword.value,
+        });
+        toastOk('Пароль изменён', 'На других устройствах попросят войти заново');
+      } else {
+        state.account = await window.api.account.login({
+          username: value('username'), password: fields.password.value,
+        });
+        toastOk('С возвращением', state.account.user.username);
+      }
+      render();
+    });
+  }
+
+  async function loadAccount() {
+    try {
+      state.account = await window.api.account.restore();
+    } catch (e) {
+      state.account = { signedIn: false, online: false, user: null, problem: e.message };
+    }
+  }
+
   function renderAccounts(body, actions) {
     actions.appendChild(button('Офлайн-аккаунт', I.user, 'ghost', openOfflineModal));
     actions.appendChild(button('Войти через Microsoft', I.shield, 'primary', openMicrosoftLogin));
+
+    // Учётная запись лаунчера — отдельно от игровых профилей
+    body.appendChild(kubickAccountPanel());
 
     if (!state.accounts.list.length) {
       body.appendChild(el(
@@ -2826,7 +3339,7 @@
 
   function friendRow(friend) {
     const row = el(
-      '<div class="friend-row' + (friend.online ? ' online' : '') + '">' +
+      '<div class="friend-row' + (friend.online ? ' online' : '') + '" data-id="' + esc(friend.code) + '">' +
         '<div class="avatar">' + esc(friend.nick.slice(0, 1).toUpperCase()) + '</div>' +
         '<div class="grow" style="min-width:0">' +
           '<b>' + esc(friend.nick) + '</b>' +
@@ -3010,7 +3523,7 @@
 
   function serverCard(server) {
     const card = el(
-      '<button class="srv-card' + (server.online ? '' : ' offline') + '">' +
+      '<button class="srv-card' + (server.online ? '' : ' offline') + '" data-id="' + esc(server.id) + '">' +
         '<div class="srv-logo">' +
           (server.icon ? '<img src="' + esc(server.icon) + '" alt="">'
                        : esc(server.name.slice(0, 2).toUpperCase())) +
@@ -3427,7 +3940,7 @@
     }
 
     const row = el(
-      '<div class="proxy-row' + (isActive ? ' active' : '') + '">' +
+      '<div class="proxy-row' + (isActive ? ' active' : '') + '" data-id="' + esc(proxy.id) + '">' +
         '<div class="proxy-dot' + (alive ? ' ok' : check ? ' bad' : '') + '"></div>' +
         '<div class="grow" style="min-width:0">' +
           '<b>' + esc(proxy.label) + '</b>' +
@@ -3719,26 +4232,7 @@
         render();
       }));
     }
-    javaCtl.appendChild(button('Найти в системе', I.search, 'sm', async () => {
-      await guard('Поиск не удался', async () => {
-        setStatus('Ищем установленные Java…', null, 'busy');
-        const list = await window.api.java.scan();
-        setStatus('Готов к работе', 0, '');
-        if (!list.length) {
-          toastErr('Java не найдена', 'Ничего страшного — лаунчер скачает нужную версию сам при первом запуске');
-          return;
-        }
-        await modal({
-          title: 'Найденные версии Java',
-          subtitle: 'Всего: ' + list.length,
-          body: '<div class="stack" style="gap:8px">' + list.map((j) =>
-            '<div class="file-row"><div class="fname">Java ' + j.major + '<div class="muted" style="font-size:11.5px">' +
-            esc(j.path) + '</div></div></div>').join('') + '</div>',
-          buttons: [{ label: 'Закрыть', value: null }],
-          wide: true,
-        });
-      });
-    }));
+    javaCtl.appendChild(button('Найти в системе', I.search, 'sm', openJavaList));
     javaRow.appendChild(javaCtl);
     perf.appendChild(javaRow);
 
@@ -3766,6 +4260,93 @@
       'Крестик прячет окно в область уведомлений — лаунчер продолжает работать и видит друзей. ' +
       'Полный выход через меню значка', 'minimizeToTray'));
     host.appendChild(behaviour);
+  }
+
+  /** Откуда взялся каждый найденный вариант — это объясняет порядок выбора. */
+  const JAVA_SOURCE_LABEL = {
+    runtime: 'скачана лаунчером',
+    manual: 'указана вручную',
+    javaHome: 'JAVA_HOME',
+    registry: 'реестр Windows',
+    wellKnown: 'типовая папка установки',
+    path: 'найдена в PATH',
+  };
+
+  /**
+   * Список найденных Java и установка недостающих версий.
+   * Версия у каждого варианта прочитана из самой Java, а не угадана по имени папки.
+   */
+  async function openJavaList() {
+    let list = [];
+    await guard('Поиск не удался', async () => {
+      setStatus('Ищем установленные Java…', null, 'busy');
+      list = await window.api.java.scan();
+      setStatus('Готов к работе', 0, '');
+    });
+
+    const body = el('<div class="stack"></div>');
+
+    if (!list.length) {
+      body.appendChild(el('<div class="net-empty">' + I.coffee +
+        '<b>Java в системе не найдена</b>' +
+        '<span>Это не проблема: лаунчер скачает нужную версию сам. ' +
+        'Можно сделать это заранее кнопками ниже.</span></div>'));
+    } else {
+      const rows = el('<div class="stack" style="gap:8px"></div>');
+      for (const j of list) {
+        const row = el(
+          '<div class="file-row">' +
+            '<div class="fname"><b>Java ' + esc(String(j.major)) + '</b>' +
+              (j.version ? ' <span class="muted">' + esc(j.version) + '</span>' : '') +
+              '<div class="muted" style="font-size:11.5px">' + esc(JAVA_SOURCE_LABEL[j.source] || j.source) +
+              ' · ' + esc(j.path) + '</div>' +
+            '</div>' +
+          '</div>'
+        );
+        const ctl = el('<div class="row-ctl"></div>');
+        ctl.appendChild(button('Использовать', I.check, 'sm', async () => {
+          await saveSettings({ javaPath: j.path });
+          window.UI.closeModal();
+          render();
+          toastOk('Java выбрана', 'Версия ' + j.major);
+        }));
+        row.appendChild(ctl);
+        rows.appendChild(row);
+      }
+      body.appendChild(rows);
+    }
+
+    body.appendChild(el('<div class="hint" style="margin-top:4px">Скачать заранее — пригодится, ' +
+      'если играете и на новых версиях, и на старых: под 1.16.5 и старше нужна именно Java 8, ' +
+      'а на новой она не запустится.</div>'));
+
+    const grabRow = el('<div class="row-ctl" style="flex-wrap:wrap"></div>');
+    for (const major of [8, 17, 21]) {
+      const has = list.some((j) => j.major === major);
+      const btn = button(has ? 'Java ' + major + ' — есть' : 'Скачать Java ' + major,
+        has ? I.check : I.download, 'sm', async () => {
+          btn.disabled = true;
+          btn.textContent = 'Загрузка…';
+          await guard('Не удалось установить Java', async () => {
+            const info = await window.api.java.install(major);
+            toastOk('Java ' + major + ' установлена', info.path);
+            window.UI.closeModal();
+            render();
+          });
+          btn.disabled = false;
+        });
+      btn.disabled = has;
+      grabRow.appendChild(btn);
+    }
+    body.appendChild(grabRow);
+
+    await modal({
+      title: 'Java в системе',
+      subtitle: list.length ? 'Найдено вариантов: ' + list.length : 'Ничего не найдено',
+      body,
+      buttons: [{ label: 'Закрыть', value: null }],
+      wide: true,
+    });
   }
 
   /* --- Игра: окно --- */
@@ -4047,6 +4628,9 @@
       'Нужен для каталога и сборок CurseForge — получить на console.curseforge.com', 'curseforgeKey', 'password'));
     api.appendChild(textRow('Azure Client ID',
       'Для входа через Microsoft — приложение в portal.azure.com с public client flows', 'azureClientId', 'text'));
+    api.appendChild(textRow('Сервер аккаунтов Kubick',
+      'Адрес своего сервера учётных записей, например https://account.example.com. ' +
+      'Пока пусто — вход по нику и паролю недоступен', 'accountServer', 'text'));
     host.appendChild(api);
   }
 
@@ -4547,8 +5131,12 @@
       await loadInstances();
       if (state.view === 'library') render();
       if (e.error) {
-        setStatus('Игра завершилась с ошибкой', 0, '');
-        toastErr('Игра закрылась', e.error);
+        // Причина уже разобрана в главном процессе — показываем её, а не код выхода
+        const cause = e.crash && e.crash.cause;
+        setStatus(cause ? cause.title : 'Игра завершилась с ошибкой', 0, '');
+        toastErr(cause ? cause.title : 'Игра закрылась', cause ? cause.fix : e.error);
+        // Запись уже сохранена — если открыто окно этой сборки, обновим список падений
+        state.lastCrash = e.crash || null;
       } else {
         setStatus('Готов к работе', 0, '');
         toast('Сессия завершена', 'Вы играли ' + formatDuration(e.seconds || 0));

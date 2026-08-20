@@ -1606,3 +1606,76 @@ input[type='range']::-webkit-slider-thumb:hover { box-shadow: 0 0 0 6px var(--ac
 /* Две колонки в форме — адрес и порт рядом */
 .row-2 { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
 .net-arrow { color: var(--text-mute); padding: 0 2px; }
+
+/* ===== Журнал падений ===== */
+.crash-row {
+  border: 1px solid var(--line);
+  border-left: 3px solid #c0685a;
+  border-radius: var(--r);
+  background: var(--surface-2);
+  padding: 13px 15px;
+}
+.crash-row.unknown { border-left-color: var(--line-strong); }
+.crash-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.crash-head b { font-size: 14px; font-weight: 620; }
+.crash-when { font-size: 11.5px; color: var(--text-mute); flex-shrink: 0; }
+.crash-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.crash-why { font-size: 12.5px; color: var(--text-dim); line-height: 1.55; margin-top: 9px; }
+.crash-fix {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 12.5px; line-height: 1.55; margin-top: 7px;
+  color: var(--text);
+}
+.crash-fix svg { width: 14px; height: 14px; flex: 0 0 14px; margin-top: 2px; color: #9caf88; }
+.crash-detail { font-size: 11.5px; color: var(--text-mute); margin-top: 7px; word-break: break-word; }
+.crash-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+
+/* ===== Выбор загрузчика при смене ===== */
+.loader-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+  gap: 8px;
+}
+.loader-card {
+  position: relative;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  text-align: left;
+  transition: border-color .13s, background .13s, transform .13s;
+}
+.loader-card:hover:not(.disabled) { border-color: var(--line-strong); transform: translateY(-1px); }
+.loader-card.active { border-color: var(--accent); background: var(--accent-soft); }
+.loader-card.disabled { opacity: .4; cursor: not-allowed; }
+.loader-card b { font-size: 13.5px; font-weight: 620; }
+.loader-card span { font-size: 11.5px; color: var(--text-mute); }
+.loader-now {
+  position: absolute; top: 7px; right: 8px;
+  font-style: normal; font-size: 10px; font-weight: 600;
+  color: var(--text-mute);
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  padding: 1px 6px;
+}
+.io-part input[type='radio'] { accent-color: var(--accent); }
+
+/* ===== Аккаунт Kubick ===== */
+.acc-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.acc-row b { font-size: 14px; font-weight: 620; }
+.acc-state {
+  font-size: 11px; font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+.acc-state.on { color: #9caf88; border-color: rgba(156,175,136,.35); background: rgba(156,175,136,.11); }
+.acc-state.off { color: #d9a256; border-color: rgba(217,162,86,.35); background: rgba(217,162,86,.11); }

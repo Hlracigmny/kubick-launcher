@@ -1,5 +1,6 @@
 'use strict';
 const dgram = require('dgram');
+const discovery = require('./netdiscovery');
 const crypto = require('crypto');
 const { store } = require('./store');
 const lan = require('./lan');
@@ -141,7 +142,11 @@ function announce() {
   });
   const buf = Buffer.from(payload, 'utf8');
   try {
-    socket.send(buf, 0, buf.length, PORT, GROUP);
+    // Рассылаем и в группу, и широковещательно: в сети с фильтрацией мультикаста
+    // доходит только второе, а лишний дубль друзья отбросят по коду
+    for (const target of discovery.announceTargets(GROUP)) {
+      try { socket.send(buf, 0, buf.length, PORT, target); } catch { /* этот адрес недоступен */ }
+    }
   } catch {
     // сеть могла отвалиться — попробуем в следующий раз
   }
@@ -211,13 +216,21 @@ function start(onChange) {
   sock.on('message', handle);
 
   sock.on('listening', () => {
-    try {
-      sock.addMembership(GROUP);
-      sock.setMulticastTTL(1);
-      status = { listening: true, error: null };
-    } catch (e) {
-      status = { listening: false, error: 'Сеть недоступна: ' + e.message };
-    }
+    const membership = discovery.joinOnAllInterfaces(sock, GROUP);
+    try { sock.setMulticastTTL(1); } catch { /* адаптер без мультикаста */ }
+
+    // Свой протокол мы контролируем с обеих сторон, поэтому здесь есть запасной путь:
+    // там, где мультикаст режется (гостевой Wi-Fi, часть роутеров), остаётся броадкаст
+    let broadcast = false;
+    try { sock.setBroadcast(true); broadcast = true; } catch { /* нельзя — обойдёмся */ }
+
+    status = {
+      listening: membership.joined.length > 0 || broadcast,
+      error: membership.joined.length || broadcast ? null : discovery.describe(membership, false),
+      multicast: membership.joined.length > 0,
+      broadcast,
+      note: membership.joined.length ? null : discovery.describe(membership, broadcast),
+    };
     push();
   });
 

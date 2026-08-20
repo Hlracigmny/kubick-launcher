@@ -123,6 +123,17 @@
       addFiles: () => delay({ added: 0 }), deleteFile: () => delay(true),
       pingServers: () => delay([]), openFile: () => delay(true),
     },
+    crash: {
+      list: () => delay([
+        { instanceId:'fab-1', instanceName:'Fabulously Optimized', versionId:'26.2', java:25, code:1, at:Date.now()-3600e3, playedSeconds:4,
+          cause:{ id:'natives', title:'Не найдены нативные библиотеки', why:'Игре не хватает lwjgl.dll и соседних файлов: они либо не распаковались, либо не попали в classpath.', fix:'Откройте раздел «Версия» в окне сборки и нажмите «Переустановить файлы».', detail:null },
+          description:'Loading library LWJGL system', exception:'java.lang.UnsatisfiedLinkError: Failed to locate library: lwjgl.dll',
+          gameReport:'C:/crash.txt', logFile:'C:/log.log', tail:['[LWJGL] Failed to load a library.'] },
+        { instanceId:'fab-1', instanceName:'Fabulously Optimized', versionId:'26.2', java:25, code:-1073741819, at:Date.now()-86400e3, playedSeconds:930,
+          cause:null, description:null, exception:null, gameReport:null, logFile:'C:/log.log', tail:['ничего понятного'] },
+      ]),
+      remove: () => delay(true), clear: () => delay(true), open: () => delay(true),
+    },
     servers: { list: () => delay(servers), status: () => delay(servers), ping: () => delay(servers[0]) },
     proxy: {
       list: () => delay(proxies),
@@ -150,8 +161,47 @@
     fonts: { list: () => delay({ list: [] }), css: () => delay({ css: '', stack: '' }) },
     updates: { status: () => delay({ currentVersion: '1.5.0', state: 'idle' }) },
     versions: { list: () => delay({ versions: [{ id: '1.21.1', type: 'release', releaseTime: '2024-08-08' }], latest: { release: '1.21.1' } }) },
-    java: { scan: () => delay([]), install: () => delay(true), pick: () => delay(null) },
-    loader: { versions: () => delay([]) },
+    java: {
+      scan: () => delay([
+        { major: 21, path: 'C:/AppData/.kubick-launcher/java/temurin-21/bin/java.exe', source: 'runtime', version: '21.0.5' },
+        { major: 8, path: 'C:/Program Files/Java/jre1.8.0_502/bin/java.exe', source: 'registry', version: '1.8.0_502' },
+      ]),
+      install: (m) => delay({ major: m, path: 'C:/AppData/.kubick-launcher/java/temurin-' + m + '/bin/java.exe' }, 400),
+      pick: () => delay(null),
+      validate: () => delay({ ok: true, info: { major: 21 } }),
+      requirement: () => delay({ required: 21, max: null, mcVersion: '1.21.1', satisfied: true, available: [] }),
+    },
+    account: {
+      status: () => delay({ signedIn: true, online: true, configured: false, user: { username: 'Steve', uuid: '5627dd98-e6be-3c21-b8a8-e92344183641' }, offlineDaysLeft: 30 }),
+      restore: () => delay({ signedIn: true, online: false, configured: false, user: { username: 'Steve', uuid: '5627dd98-e6be-3c21-b8a8-e92344183641' }, offlineDaysLeft: 12 }),
+      register: () => delay({ signedIn: true, online: true, configured: false, user: { username: 'Steve' }, offlineDaysLeft: 30 }),
+      login: () => delay({ signedIn: true, online: true, configured: false, user: { username: 'Steve' }, offlineDaysLeft: 30 }),
+      logout: () => delay({ signedIn: false, online: false, configured: false, user: null }),
+      changePassword: () => delay({ signedIn: true, online: true, configured: false, user: { username: 'Steve' }, offlineDaysLeft: 30 }),
+      friends: () => delay({ friends: [] }),
+      addFriend: () => delay({ ok: true }),
+    },
+    loader: {
+      versions: () => delay([]),
+      available: () => delay([
+        { id: 'vanilla', label: 'Vanilla', versions: [], available: true },
+        { id: 'fabric', label: 'Fabric', versions: [{ id: '0.16.9', stable: true }, { id: '0.16.5', stable: true }], available: true },
+        { id: 'quilt', label: 'Quilt', versions: [{ id: '0.26.0', stable: true }], available: true },
+        { id: 'forge', label: 'Forge', versions: [{ id: '47.3.0', stable: true }, { id: '47.2.0', stable: true }], available: true },
+        { id: 'neoforge', label: 'NeoForge', versions: [], available: false },
+      ]),
+      plan: () => delay({
+        instanceId: 'fab-1', name: 'Fabulously Optimized', mcVersion: '1.21.1',
+        from: { loader: 'fabric', label: 'Fabric', version: '0.16.5' },
+        to: { loader: 'forge', label: 'Forge' },
+        mods: 96, modsCompatible: false, backupName: 'mods_backup_fabric',
+        keeps: ['saves', 'options.txt', 'resourcepacks', 'shaderpacks', 'screenshots', 'config'],
+      }),
+      apply: () => delay({
+        instance: instances[0], from: 'fabric', to: 'forge', versionId: 'forge-47.3.0-1.21.1',
+        mods: { action: 'backup', moved: 96, to: 'mods_backup_fabric' }, removedOldProfile: true,
+      }, 500),
+    },
     modpacks: { install: () => delay({}) },
   };
 
