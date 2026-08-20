@@ -21,6 +21,7 @@ const themes = require('./themes');
 const vpn = require('./vpn');
 const idata = require('./instance-data');
 const mcping = require('./mcping');
+const serverList = require('./servers');
 
 let win = null;
 let tray = null;
@@ -269,7 +270,7 @@ handle('instances:openFolder', async ({ id, sub }) => {
 
 /* ---------------------------- Запуск ------------------------------- */
 
-handle('game:launch', async ({ id }) => {
+handle('game:launch', async ({ id, server }) => {
   const inst = store.getInstance(id);
   if (!inst) throw new Error('Сборка не найдена');
 
@@ -299,7 +300,7 @@ handle('game:launch', async ({ id }) => {
       }
       send('game:exit', event);
     }
-  });
+  }, { server: server || null });
 
   const current = store.getInstance(id);
   if (current) store.upsertInstance({ ...current, lastPlayed: Date.now() });
@@ -419,6 +420,12 @@ handle('mods:installed', async ({ instanceId }) => {
 
 handle('mods:toggle', async ({ filePath, enabled }) => mods.toggle(filePath, enabled));
 handle('mods:remove', async ({ filePath }) => { mods.remove(filePath); return true; });
+
+/* ---------------------------- Серверы ------------------------------ */
+
+handle('servers:list', async () => serverList.list());
+handle('servers:status', async ({ force } = {}) => serverList.statuses({ force: Boolean(force) }));
+handle('servers:ping', async ({ address }) => serverList.pingOne(address));
 
 /* --------------------- Содержимое сборки (данные игры) -------------- */
 

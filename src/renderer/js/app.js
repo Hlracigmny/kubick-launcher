@@ -29,6 +29,7 @@
     vpnCountries: null,
     vpnServers: null,
     vpnCountry: null,
+    servers: null,
     friends: null,
   };
 
@@ -70,7 +71,8 @@
     library: { title: 'Библиотека', subtitle: 'Ваши сборки Minecraft', render: renderLibrary },
     mods: { title: 'Каталог модов', subtitle: 'Modrinth и CurseForge — актуальные базы', render: renderMods },
     accounts: { title: 'Аккаунты', subtitle: 'Microsoft и офлайн-профили', render: renderAccounts },
-    network: { title: 'Игра по сети', subtitle: 'Миры друзей в локальной сети и список серверов', render: renderNetwork },
+    friends: { title: 'Друзья', subtitle: 'Общий список друзей и их открытые миры', render: renderFriends },
+    servers: { title: 'Серверы', subtitle: 'Популярные публичные серверы с живым онлайном', render: renderServers },
     vpn: { title: 'VPN', subtitle: 'Бесплатные серверы VPN Gate с выбором страны', render: renderVpn },
     settings: { title: 'Настройки', subtitle: 'Java, память и внешний вид', render: renderSettings },
     console: { title: 'Консоль', subtitle: 'Логи запуска и работы игры', render: renderConsole },
@@ -667,10 +669,30 @@
           paint();
         });
       }));
-      aside.appendChild(button('Добавить сервер', I.plus, 'sm block', async () => {
-        window.UI.closeModal();
-        await addServerToInstance('', '');
-      }));
+      // Добавляем прямо здесь: закрывать окно, чтобы вписать адрес, неудобно
+      const addBox = el(
+        '<div class="add-server">' +
+          '<div class="cart-title">Новый сервер</div>' +
+          '<input class="input" data-role="name" placeholder="Название" maxlength="48">' +
+          '<input class="input" data-role="ip" placeholder="адрес или IP:порт">' +
+        '</div>'
+      );
+      const nameInput = addBox.querySelector('[data-role="name"]');
+      const ipInput = addBox.querySelector('[data-role="ip"]');
+      const addBtn = button('Добавить', I.plus, 'sm block', async () => {
+        const address = ipInput.value.trim();
+        if (!address) { toastErr('Укажите адрес', 'Например play.example.net или 192.168.0.5:25565'); return; }
+        await guard('Не удалось добавить сервер', async () => {
+          const saved = await window.api.lan.addServer(inst.id, nameInput.value.trim() || address, address);
+          nameInput.value = '';
+          ipInput.value = '';
+          reload('servers');
+          toastOk('Сервер добавлен', saved.name + ' — появится в игре после перезапуска');
+        });
+      });
+      ipInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBtn.click(); });
+      addBox.appendChild(addBtn);
+      aside.appendChild(addBox);
       aside.appendChild(button('Обновить список', I.rows, 'sm block', () => reload('servers')));
     }
 
@@ -1565,7 +1587,7 @@
 
   /* ============================= Запуск ============================= */
 
-  async function launchGame(id) {
+  async function launchGame(id, server) {
     if (!activeAccount()) {
       toastErr('Нужен аккаунт', 'Добавьте аккаунт на вкладке «Аккаунты»');
       go('accounts');
@@ -1576,7 +1598,7 @@
     setStatus('Подготовка к запуску…', 0, 'busy');
 
     try {
-      await window.api.game.launch(id);
+      await window.api.game.launch(id, server || null);
     } catch (e) {
       toastErr('Не удалось запустить', e.message);
       setStatus('Ошибка запуска', 0, '');
@@ -2217,81 +2239,11 @@
 
   /* ========================== Игра по сети =========================== */
 
-  function renderNetwork(body, actions) {
-    const lan = state.lan;
-
-    actions.appendChild(button('Добавить по адресу', I.plus, 'ghost sm', openManualServer));
+  function renderFriends(body, actions) {
+    actions.appendChild(button('Добавить сервер вручную', I.plus, 'ghost sm', openManualServer));
     actions.appendChild(button('Добавить друга', I.users, 'primary sm', openAddFriend));
 
     body.appendChild(friendsPanel());
-
-    /* --- Найденные миры --- */
-    const found = el(
-      '<div class="panel">' +
-        '<h2>Миры в вашей сети</h2>' +
-        '<p class="panel-sub">Когда друг открывает мир для сети, он появляется здесь сам — ' +
-        'адрес вводить не нужно.</p>' +
-        '<div data-role="worlds"></div>' +
-      '</div>'
-    );
-    const worldsHost = found.querySelector('[data-role="worlds"]');
-
-    if (!lan) {
-      worldsHost.appendChild(el('<div class="skeleton" style="height:64px"></div>'));
-    } else if (lan.error) {
-      worldsHost.appendChild(el(
-        '<div class="net-note err">' + esc(lan.error) +
-        '<br><span class="muted">Обычно это значит, что порт 4445 занят другим лаунчером.</span></div>'
-      ));
-    } else if (!lan.worlds.length) {
-      worldsHost.appendChild(el(
-        '<div class="net-empty">' + I.network +
-          '<b>Пока никто не открыл мир</b>' +
-          '<span>Ждём широковещательные сообщения Minecraft в локальной сети…</span>' +
-        '</div>'
-      ));
-    } else {
-      const list = el('<div class="stack" style="gap:9px"></div>');
-      for (const world of lan.worlds) list.appendChild(worldRow(world));
-      worldsHost.appendChild(list);
-    }
-    body.appendChild(found);
-
-    /* --- Как открыть свой мир --- */
-    const share = el(
-      '<div class="panel">' +
-        '<h2>Открыть свой мир для друзей</h2>' +
-        '<p class="panel-sub">Все должны быть в одной сети: домашний Wi-Fi, кабель или общий VPN.</p>' +
-        '<ol class="net-steps">' +
-          '<li>Запустите сборку и войдите в свой мир.</li>' +
-          '<li>Нажмите <b>Esc</b> → <b>Открыть для сети</b> → <b>Открыть мир для сети</b>.</li>' +
-          '<li>Игра покажет порт, а этот экран сразу увидит ваш мир — как и лаунчеры друзей.</li>' +
-        '</ol>' +
-        '<div data-role="addresses"></div>' +
-      '</div>'
-    );
-    const addrHost = share.querySelector('[data-role="addresses"]');
-    const addresses = (lan && lan.addresses) || [];
-    if (addresses.length) {
-      addrHost.appendChild(el('<div class="hint" style="margin-bottom:8px">Ваши адреса в сети — продиктуйте другу, если поиск не сработал:</div>'));
-      const row = el('<div class="inline"></div>');
-      for (const a of addresses) {
-        const chip = el('<button class="chip net-chip" title="Скопировать">' + esc(a.address) + '<span class="muted"> · ' + esc(a.iface) + '</span></button>');
-        chip.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(a.address);
-            toastOk('Адрес скопирован', a.address);
-          } catch {
-            toastErr('Не удалось скопировать', 'Скопируйте вручную: ' + a.address);
-          }
-        });
-        row.appendChild(chip);
-      }
-      addrHost.appendChild(row);
-    } else {
-      addrHost.appendChild(el('<div class="hint">Сетевые адреса не найдены — проверьте подключение к сети.</div>'));
-    }
-    body.appendChild(share);
 
     /* --- Серверы, добавленные в сборки --- */
     if (state.instances.length) {
@@ -2305,7 +2257,7 @@
       const host = saved.querySelector('[data-role="list"]');
       if (!state.lanServers) {
         host.appendChild(el('<div class="skeleton" style="height:48px"></div>'));
-        loadLanServers().then(() => { if (state.view === 'network') render(); });
+        loadLanServers().then(() => { if (state.view === 'friends') render(); });
       } else if (!state.lanServers.length) {
         host.appendChild(el('<div class="hint">Пока ни одного сервера не добавлено.</div>'));
       } else {
@@ -2469,37 +2421,9 @@
     });
   }
 
-  function worldRow(world) {
-    const row = el(
-      '<div class="net-world' + (world.own ? ' own' : '') + '">' +
-        '<span class="net-dot"></span>' +
-        '<div class="grow" style="min-width:0">' +
-          '<b>' + esc(world.motd) + '</b>' +
-          '<div class="muted" style="font-size:11.5px">' + esc(world.host) +
-            (world.own ? ' · это ваш мир' : '') + '</div>' +
-        '</div>' +
-      '</div>'
-    );
-    const ctl = el('<div class="row-ctl"></div>');
-
-    ctl.appendChild(button('Скопировать адрес', I.copy, 'sm', async () => {
-      try {
-        await navigator.clipboard.writeText(world.host);
-        toastOk('Адрес скопирован', world.host);
-      } catch {
-        toastErr('Не удалось скопировать', world.host);
-      }
-    }));
-
-    if (!world.own && state.instances.length) {
-      ctl.appendChild(button('Добавить в сборку', I.plus, 'primary sm', () => addServerToInstance(world.motd, world.host)));
-    }
-    row.appendChild(ctl);
-    return row;
-  }
 
   /** Записывает адрес в servers.dat выбранной сборки — в игре он появится сам. */
-  async function addServerToInstance(name, ip) {
+  async function addServerToInstance(name, ip, instanceId) {
     if (!state.instances.length) {
       toastErr('Нет сборок', 'Сначала создайте сборку, куда добавить сервер');
       return;
@@ -2510,6 +2434,8 @@
     instSel.innerHTML = state.instances
       .map((i) => '<option value="' + esc(i.id) + '">' + esc(i.name) + ' · ' + esc(i.mcVersion) + '</option>')
       .join('');
+    // Без явного выбора сервер уходил в первую сборку списка, а не в ту, откуда добавляют
+    if (instanceId && state.instances.some((i) => i.id === instanceId)) instSel.value = instanceId;
     const instField = el('<div class="field"><label>В какую сборку добавить</label></div>');
     instField.appendChild(instSel);
     body.appendChild(instField);
@@ -2566,6 +2492,164 @@
       }
     }
     state.lanServers = all;
+  }
+
+  /* ============================= Серверы ============================= */
+
+  /**
+   * Подборка публичных серверов. В списке хранятся только имя, адрес и сайт —
+   * логотип, онлайн и задержка приходят живым опросом самих серверов.
+   */
+  function renderServers(body, actions) {
+    actions.appendChild(button('Обновить', I.refresh, 'ghost sm', async () => {
+      setStatus('Опрашиваем серверы…', null, 'busy');
+      await guard('Не удалось опросить серверы', async () => {
+        state.servers = await window.api.servers.status(true);
+        setStatus('Готов к работе', 0, '');
+        render();
+      });
+    }));
+
+    if (!state.servers) {
+      const skeleton = el('<div class="srv-grid"></div>');
+      for (let i = 0; i < 6; i++) skeleton.appendChild(el('<div class="skeleton" style="height:150px"></div>'));
+      body.appendChild(skeleton);
+      loadServers().then(() => { if (state.view === 'servers') render(); });
+      return;
+    }
+
+    const online = state.servers.filter((s) => s.online);
+    const players = online.reduce((n, s) => n + s.players, 0);
+    body.appendChild(el(
+      '<div class="muted" style="margin-bottom:14px;font-size:12.5px">Отвечают ' + online.length +
+      ' из ' + state.servers.length + ' · сейчас играют ' + formatCount(players) + ' человек. ' +
+      'Данные опрашиваются у самих серверов.</div>'
+    ));
+
+    const grid = el('<div class="srv-grid"></div>');
+    for (const server of state.servers) grid.appendChild(serverCard(server));
+    body.appendChild(grid);
+  }
+
+  function serverCard(server) {
+    const card = el(
+      '<button class="srv-card' + (server.online ? '' : ' offline') + '">' +
+        '<div class="srv-logo">' +
+          (server.icon ? '<img src="' + esc(server.icon) + '" alt="">'
+                       : esc(server.name.slice(0, 2).toUpperCase())) +
+        '</div>' +
+        '<div class="srv-name">' + esc(server.name) + '</div>' +
+        '<div class="srv-addr">' + esc(server.address) + '</div>' +
+        '<div class="srv-foot">' +
+          (server.online
+            ? '<span class="srv-ping ' + pingClass(server.latency) + '">' + server.latency + ' мс</span>' +
+              '<span class="srv-online">' + formatCount(server.players) + ' онлайн</span>'
+            : '<span class="srv-ping down">не отвечает</span>') +
+        '</div>' +
+      '</button>'
+    );
+    const img = card.querySelector('img');
+    if (img) img.addEventListener('error', () => { img.parentElement.textContent = server.name.slice(0, 2).toUpperCase(); });
+    card.addEventListener('click', () => openServerCard(server));
+    return card;
+  }
+
+  function pingClass(ms) {
+    if (!ms) return '';
+    if (ms < 120) return 'good';
+    if (ms < 400) return 'mid';
+    return 'slow';
+  }
+
+  /** Карточка сервера: адрес, онлайн, подключение и ссылка на сайт. */
+  async function openServerCard(server) {
+    const body = el('<div class="stack"></div>');
+
+    body.appendChild(el(
+      '<div class="srv-head">' +
+        '<div class="srv-logo big">' +
+          (server.icon ? '<img src="' + esc(server.icon) + '" alt="">'
+                       : esc(server.name.slice(0, 2).toUpperCase())) + '</div>' +
+        '<div><b style="font-size:16px">' + esc(server.name) + '</b>' +
+          '<div class="mono" style="color:var(--text-dim);margin-top:2px">' + esc(server.address) + '</div>' +
+          (server.motd ? '<div class="muted" style="font-size:12px;margin-top:4px">' + esc(server.motd) + '</div>' : '') +
+        '</div>' +
+      '</div>'
+    ));
+
+    body.appendChild(el(
+      '<div class="srv-stats">' +
+        '<div><b>' + (server.online ? formatCount(server.players) + ' / ' + formatCount(server.maxPlayers) : '—') + '</b><span>Игроков</span></div>' +
+        '<div><b>' + (server.online ? server.latency + ' мс' : '—') + '</b><span>Задержка</span></div>' +
+        '<div><b>' + esc(server.version ? server.version.replace(/§./g, '').slice(0, 18) : '—') + '</b><span>Версия</span></div>' +
+        '<div><b>' + esc(server.region) + '</b><span>Регион</span></div>' +
+      '</div>'
+    ));
+
+    if (!server.online) {
+      body.appendChild(el('<div class="net-note err">Сервер не ответил: ' +
+        esc(server.error || 'нет соединения') + '. Возможно, он временно недоступен.</div>'));
+    }
+
+    /* --- Куда подключаться --- */
+    let instSel = null;
+    if (state.instances.length) {
+      instSel = el('<select class="select"></select>');
+      instSel.innerHTML = state.instances
+        .map((i) => '<option value="' + esc(i.id) + '">' + esc(i.name) + ' · ' + esc(i.mcVersion) + '</option>')
+        .join('');
+      const field = el('<div class="field"><label>Через какую сборку играть</label></div>');
+      field.appendChild(instSel);
+      field.appendChild(el('<span class="hint">Адрес пропишется в список серверов сборки, ' +
+        'а игра запустится сразу на этом сервере.</span>'));
+      body.appendChild(field);
+    } else {
+      body.appendChild(el('<div class="hint">Чтобы подключиться, сначала создайте сборку.</div>'));
+    }
+
+    const choice = await modal({
+      title: server.name,
+      subtitle: server.online ? 'Сейчас на сервере ' + formatCount(server.players) + ' игроков' : 'Сервер не отвечает',
+      body,
+      buttons: [
+        { label: 'Закрыть', value: null },
+        { label: 'Скопировать адрес', value: 'copy' },
+        { label: 'Сайт', value: 'site' },
+        { label: 'Подключиться', kind: 'primary', value: 'play' },
+      ],
+    });
+
+    if (choice === 'copy') {
+      try {
+        await navigator.clipboard.writeText(server.address);
+        toastOk('Адрес скопирован', server.address);
+      } catch {
+        toastErr('Не удалось скопировать', server.address);
+      }
+      return;
+    }
+    if (choice === 'site') {
+      await window.api.app.openExternal(server.site);
+      return;
+    }
+    if (choice !== 'play') return;
+
+    if (!instSel) { toastErr('Нет сборок', 'Сначала создайте сборку'); return; }
+    const instanceId = instSel.value;
+
+    await guard('Не удалось подключиться', async () => {
+      await window.api.lan.addServer(instanceId, server.name, server.address);
+      state.lanServers = null;
+    });
+    await launchGame(instanceId, server.address);
+  }
+
+  async function loadServers() {
+    try {
+      state.servers = await window.api.servers.status(false);
+    } catch {
+      state.servers = [];
+    }
   }
 
   /* ============================== VPN =============================== */
@@ -3663,22 +3747,17 @@
         const fresh = nowOnline[nowOnline.length - 1];
         toastOk('Друг открыл мир', fresh.nick + ' — сервер добавлен в ваши сборки');
       }
-      if (state.view === 'network') render();
+      if (state.view === 'friends') render();
     });
 
     window.api.events.onLan((snapshot) => {
-      const hadWorlds = state.lan ? state.lan.worlds.length : 0;
       state.lan = snapshot;
-      const badge = $('#badge-lan');
+      const badge = $('#badge-friends');
       if (badge) {
         badge.textContent = snapshot.worlds.length || '';
         badge.style.display = snapshot.worlds.length ? '' : 'none';
       }
-      if (snapshot.worlds.length > hadWorlds) {
-        const fresh = snapshot.worlds.find((w) => !w.own);
-        if (fresh) toast('Найден мир в сети', fresh.motd + ' — ' + fresh.host);
-      }
-      if (state.view === 'network') render();
+      if (state.view === 'friends') render();
     });
 
     window.api.events.onGameLog((e) => pushLog(e.line));

@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('api', {
     openFolder: (id, sub) => call('instances:openFolder', { id, sub }),
   },
   game: {
-    launch: (id) => call('game:launch', { id }),
+    launch: (id, server) => call('game:launch', { id, server }),
     stop: (id) => call('game:stop', { id }),
     running: () => call('game:running'),
     log: (id) => call('logs:read', { id }),
@@ -71,6 +71,11 @@ contextBridge.exposeInMainWorld('api', {
     installed: (instanceId) => call('mods:installed', { instanceId }),
     toggle: (filePath, enabled) => call('mods:toggle', { filePath, enabled }),
     remove: (filePath) => call('mods:remove', { filePath }),
+  },
+  servers: {
+    list: () => call('servers:list'),
+    status: (force) => call('servers:status', { force }),
+    ping: (address) => call('servers:ping', { address }),
   },
   inst: {
     mods: (id) => call('inst:mods', { id }),

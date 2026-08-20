@@ -26,16 +26,18 @@ function assetsRootFor(version) {
  * Собирает полный список аргументов JVM и игры.
  * Поддерживает и современный формат (arguments.jvm/game), и старый (minecraftArguments).
  */
-function buildCommand({ version, classpath, nativesDir, jarPath, gameDir, account, settings, javaInfo }) {
+function buildCommand({ version, classpath, nativesDir, jarPath, gameDir, account, settings, javaInfo, server }) {
   const memory = Math.max(512, parseInt(settings.memoryMb, 10) || 2048);
   const fullClasspath = [...classpath, jarPath].filter((p, i, arr) => p && arr.indexOf(p) === i);
 
   const features = {
     is_demo_user: false,
     has_custom_resolution: Boolean(settings.width && settings.height) && !settings.fullscreen,
+    // Прямое подключение к серверу: Minecraft умеет это с 1.20.
+    // На старых версиях таких аргументов в манифесте нет, и они просто не подставятся.
     has_quick_plays_support: false,
     is_quick_play_singleplayer: false,
-    is_quick_play_multiplayer: false,
+    is_quick_play_multiplayer: Boolean(server),
     is_quick_play_realms: false,
   };
 
@@ -62,6 +64,7 @@ function buildCommand({ version, classpath, nativesDir, jarPath, gameDir, accoun
     classpath: fullClasspath.join(CP_SEP),
     classpath_separator: CP_SEP,
     library_directory: P.libraries,
+    quickPlayMultiplayer: server || '',
   };
 
   const jvm = [];
@@ -110,6 +113,13 @@ function buildCommand({ version, classpath, nativesDir, jarPath, gameDir, accoun
 
   if (settings.fullscreen && !game.includes('--fullscreen')) game.push('--fullscreen');
 
+  // Версии до 1.20 не знают quickPlay — там подключение задаётся парой --server/--port
+  if (server && !game.includes('--quickPlayMultiplayer')) {
+    const [host, port] = String(server).split(':');
+    game.push('--server', host);
+    if (port) game.push('--port', port);
+  }
+
   const args = [...jvm, version.mainClass, ...game];
   return { args, vars, features };
 }
@@ -127,7 +137,7 @@ function sanitize(line, account) {
  * Полный цикл: установка версии -> подбор Java -> запуск процесса.
  * onEvent получает события прогресса, логов и завершения.
  */
-async function launchInstance(instance, account, settings, onEvent) {
+async function launchInstance(instance, account, settings, onEvent, options) {
   const emit = (type, payload) => {
     try { onEvent({ type, instanceId: instance.id, ...payload }); } catch { /* окно закрыто */ }
   };
@@ -161,6 +171,7 @@ async function launchInstance(instance, account, settings, onEvent) {
     account,
     settings: effective,
     javaInfo,
+    server: (options && options.server) || null,
   });
 
   const javaBin = javaMod.silentBinary(javaInfo.path);
