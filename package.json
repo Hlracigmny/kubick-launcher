@@ -1,6 +1,6 @@
 {
   "name": "kubick-launcher",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Современный лаунчер Minecraft: Vanilla, Fabric, Quilt, Forge, NeoForge + каталог модов Modrinth/CurseForge",
   "main": "src/main/index.js",
   "repository": "https://github.com/Hlracigmny/kubick-launcher",
@@ -42,7 +42,8 @@
     ],
     "publish": [
       {
-        "provider": "github"
+        "provider": "github",
+        "releaseType": "release"
       }
     ],
     "win": {
