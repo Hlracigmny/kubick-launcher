@@ -161,9 +161,6 @@ npm run icon
 В `build.publish` стоит `"releaseType": "release"`. Без него electron-builder кладёт релиз
 в черновики, а electron-updater черновики не видит — обновления бы просто не приходили.
 
-В  стоит  — без него electron-builder создаёт релиз
-черновиком, а electron-updater черновики не видит и обновления не приходят.
-
 ### Как выпустить версию
 
 Через GitHub Actions (рекомендуется — сборка идёт на чистой машине):
