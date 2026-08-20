@@ -4,3 +4,6 @@ dist-old/
 root/
 dev-app-update.yml
 *.log
+
+# Рабочие заметки — только локально
+CLAUDE.md
